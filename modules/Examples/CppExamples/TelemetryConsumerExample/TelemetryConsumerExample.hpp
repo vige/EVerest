@@ -10,31 +10,47 @@
 
 #include "ld-ev.hpp"
 
+
+// headers for required interface implementations
+#include <generated/interfaces/telemetry/Interface.hpp>
+
 // ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
 // insert your custom include headers here
 #include <memory>
 #include <string>
+#include <vector>
 
-#include <utils/mqtt_abstraction.hpp>
-#include <utils/telemetry/consumer.hpp>
+#include <everest/telemetry/sink.hpp>
 // ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
 
 namespace module {
 
+
+
 struct Conf {
     std::string filter_module_id;
+    std::string filter_module_type;
     std::string filter_set;
-    bool print_payload;
+    std::string filter_entries;
+    bool print_definitions;
+
+
 };
 
 class TelemetryConsumerExample : public Everest::ModuleBase {
 public:
     TelemetryConsumerExample() = delete;
-    TelemetryConsumerExample(const ModuleInfo& info, Everest::MqttProvider& mqtt_provider, Conf& config) :
-        ModuleBase(info), mqtt(mqtt_provider), config(config) {
-    }
+    TelemetryConsumerExample(
+        const ModuleInfo& info,
+        std::vector<std::unique_ptr<telemetryIntf>> r_telemetry,
+        Conf& config
+    ) :
+        ModuleBase(info),
+        r_telemetry(std::move(r_telemetry)),
+        config(config)
+    {};
 
-    Everest::MqttProvider& mqtt;
+    const std::vector<std::unique_ptr<telemetryIntf>> r_telemetry;
     const Conf& config;
 
     // ev@1fce4c5e-0ab8-41bb-90f7-14277703d2ac:v1
@@ -55,15 +71,17 @@ private:
     // ev@211cfdbe-f69a-4cd6-a4ec-f8aaa3d1b6c8:v1
     // insert your private definitions here
 
-    /// \brief The telemetry consumer needs an MQTTAbstraction, which the module API does not hand
-    /// out, so this module opens its own connection to the same broker. Once the framework exposes
-    /// a telemetry consumer to modules directly, this goes away.
-    std::unique_ptr<Everest::MQTTAbstraction> telemetry_mqtt;
-    std::unique_ptr<Everest::telemetry::Consumer> consumer;
-    Everest::telemetry::Consumer::Subscription subscription;
+    /// \brief Convenience over r_telemetry: it holds the definitions, translates the configured
+    /// filter into per-slot set_interest calls and prunes what this sink did not ask for.
+    std::unique_ptr<Everest::telemetry::Sink> sink;
 
-    void print(const Everest::telemetry::Envelope& envelope) const;
+    /// \returns the filter the module config describes
+    Everest::telemetry::Filter configured_filter() const;
+
+    void log_definitions() const;
+    void log_update(const types::telemetry::Update& update) const;
     // ev@211cfdbe-f69a-4cd6-a4ec-f8aaa3d1b6c8:v1
+
 };
 
 // ev@087e516b-124c-48df-94fb-109508c7cda9:v1

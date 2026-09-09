@@ -1,0 +1,33 @@
+description: >-
+  A generic telemetry set. A module provides one implementation per set. The entries of a set are
+  declared in code or in the manifest and served via get_definition. Nothing is published until a
+  subscriber declares interest.
+cmds:
+  get_definition:
+    description: >-
+      Declared entries of this set, for descriptors and device models. Answered by the publisher
+      framework, not by module code.
+    result:
+      description: The set definition
+      type: object
+      $ref: /telemetry#/SetDefinition
+  set_interest:
+    description: >-
+      Entries the calling module wants to receive. An empty list withdraws interest. The publisher
+      emits only entries wanted by at least one subscriber and sends a snapshot of the requested
+      entries whenever this is called with a non-empty list.
+    arguments:
+      module_id:
+        description: The subscribing module instance
+        type: string
+      entries:
+        description: Wanted entry names, empty to withdraw
+        type: array
+        items:
+          type: string
+vars:
+  update:
+    description: Entries that changed since the previous update, partial by design
+    type: object
+    qos: 0
+    $ref: /telemetry#/Update

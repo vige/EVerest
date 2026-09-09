@@ -1,0 +1,18 @@
+{
+  "msg_type": "Var",
+  "data": {
+    "data": {
+      "module_id": "telemetry_producer",
+      "module_type": "TelemetryProducerExample",
+      "set": "livedata",
+      "timestamp": "2026-09-09T10:41:07Z",
+      "mapping": { "evse": 1 },
+      "values": {
+        "temperature_C": 41.2,
+        "frequency_Hz": 49.98,
+        "current_A": 12.5,
+        "fw_state": "Measuring"
+      }
+    }
+  }
+}

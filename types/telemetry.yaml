@@ -1,0 +1,119 @@
+description: >-
+  Telemetry types. A telemetry set is a lazy, de-duplicated, rate-capped stream of flat scalar
+  measurements that a module declares for itself, outside of its control interfaces.
+types:
+  EntryType:
+    description: Scalar value type of an entry
+    type: string
+    enum:
+      - boolean
+      - integer
+      - number
+      - string
+  EntryDefinition:
+    description: Declaration of one entry
+    type: object
+    additionalProperties: false
+    required:
+      - name
+      - description
+      - type
+    properties:
+      name:
+        description: Entry name, ^[a-zA-Z_][a-zA-Z0-9_]*$
+        type: string
+      description:
+        description: Human readable description
+        type: string
+      type:
+        description: Value type
+        type: string
+        $ref: /telemetry#/EntryType
+      unit:
+        description: Unit of measurement
+        type: string
+      minimum:
+        description: Lower bound for integer and number entries
+        type: number
+      maximum:
+        description: Upper bound for integer and number entries
+        type: number
+      values_list:
+        description: >-
+          Allowed values for string entries. Called enum in the design note, renamed here because
+          enum is a C++ keyword and the member name is generated verbatim.
+        type: array
+        items:
+          type: string
+  SetDefinition:
+    description: Declaration of one set
+    type: object
+    additionalProperties: false
+    required:
+      - module_type
+      - set
+      - description
+      - entries
+    properties:
+      module_type:
+        description: Publishing module type
+        type: string
+      set:
+        description: Implementation id of the set
+        type: string
+      description:
+        description: Set description
+        type: string
+      max_publish_rate_hz:
+        description: Producer side cap, updates are coalesced to this rate
+        type: number
+      entries:
+        description: Declared entries
+        type: array
+        items:
+          type: object
+          $ref: /telemetry#/EntryDefinition
+  Mapping:
+    description: Three tier mapping of the publishing implementation
+    type: object
+    additionalProperties: false
+    required:
+      - evse
+    properties:
+      evse:
+        description: EVSE id
+        type: integer
+      connector:
+        description: Connector id
+        type: integer
+  Update:
+    description: One partial update
+    type: object
+    additionalProperties: false
+    required:
+      - module_id
+      - module_type
+      - set
+      - timestamp
+      - values
+    properties:
+      module_id:
+        description: Publishing module instance
+        type: string
+      module_type:
+        description: Publishing module type
+        type: string
+      set:
+        description: Implementation id of the set
+        type: string
+      timestamp:
+        description: Publish time
+        type: string
+        format: date-time
+      mapping:
+        description: Mapping of the publishing implementation, absent if not configured
+        type: object
+        $ref: /telemetry#/Mapping
+      values:
+        description: Changed entries, entry name to scalar value
+        type: object

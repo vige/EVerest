@@ -267,10 +267,15 @@ def parse_property(prop_name: str, prop: Dict, depends_on: List[str], type_file:
         else:
             raise EVerestParsingException(f'Property items of array {prop_name} does not contain a type property')
     elif prop['type'] == 'object':
-        prop_type = stringcase.capitalcase(prop_name)
-        depends_on.append(prop_type)
-        if not object_exists(prop_type):
-            parse_object(prop_type, prop, type_file)
+        if 'properties' not in prop and '$ref' not in prop:
+            # A free-form object: there is no schema to generate a struct from, so it stays json.
+            # Telemetry values need this - the entry names are declared at runtime, not in the type file.
+            prop_type = 'json::object_t'
+        else:
+            prop_type = stringcase.capitalcase(prop_name)
+            depends_on.append(prop_type)
+            if not object_exists(prop_type):
+                parse_object(prop_type, prop, type_file)
     else:
         raise Exception('Unknown type: ' + prop['type'])
 

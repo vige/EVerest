@@ -1,130 +1,116 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Pionix GmbH and Contributors to EVerest
+
 #include "TelemetryConsumerExample.hpp"
 
-#include <cstdlib>
-#include <iostream>
-#include <string>
-#include <variant>
-
-#include <utils/config/mqtt_settings.hpp>
+#include <sstream>
 
 namespace module {
 
 namespace {
 
-/// \brief The broker the manager put this module on. The framework resolves it the same way, but
-/// does not hand the settings to the module, so they are read again here.
-Everest::MQTTSettings mqtt_settings_from_env() {
-    const char* host = std::getenv("MQTT_SERVER_ADDRESS");
-    const char* port = std::getenv("MQTT_SERVER_PORT");
-
-    std::uint16_t broker_port = 1883;
-    if (port != nullptr) {
-        try {
-            broker_port = static_cast<std::uint16_t>(std::stoul(port));
-        } catch (const std::exception&) {
-            EVLOG_warning << "MQTT_SERVER_PORT is not a number, falling back to 1883";
+/// \returns the comma separated \p list split and trimmed, empty entries dropped
+std::vector<std::string> split_entries(const std::string& list) {
+    std::vector<std::string> entries;
+    std::stringstream stream{list};
+    std::string entry;
+    while (std::getline(stream, entry, ',')) {
+        const auto begin = entry.find_first_not_of(" \t");
+        if (begin == std::string::npos) {
+            continue;
         }
+        entries.push_back(entry.substr(begin, entry.find_last_not_of(" \t") - begin + 1));
     }
-
-    return Everest::create_mqtt_settings(host != nullptr ? host : "127.0.0.1", broker_port, "everest/",
-                                         "everest_external/");
-}
-
-std::string to_display_string(const Everest::telemetry::Value& value) {
-    return std::visit(
-        [](const auto& held) -> std::string {
-            using T = std::decay_t<decltype(held)>;
-            if constexpr (std::is_same_v<T, bool>) {
-                return held ? "true" : "false";
-            } else if constexpr (std::is_same_v<T, std::string>) {
-                return held;
-            } else if constexpr (std::is_same_v<T, nlohmann::json>) {
-                return held.dump();
-            } else {
-                return std::to_string(held);
-            }
-        },
-        value);
+    return entries;
 }
 
 } // namespace
 
-void TelemetryConsumerExample::print(const Everest::telemetry::Envelope& envelope) const {
-    std::cout << "\n=== telemetry " << envelope.address().to_string() << " ===\n"
-              << "  module_type: " << envelope.module_type << "\n"
-              << "  timestamp:   " << envelope.timestamp << "\n";
-
-    if (envelope.mapping.has_value()) {
-        std::cout << "  mapping:     evse " << envelope.mapping->evse;
-        if (envelope.mapping->connector.has_value()) {
-            std::cout << ", connector " << *envelope.mapping->connector;
-        }
-        std::cout << "\n";
+Everest::telemetry::Filter TelemetryConsumerExample::configured_filter() const {
+    Everest::telemetry::Filter filter;
+    if (not config.filter_module_id.empty()) {
+        filter.module_id = config.filter_module_id;
     }
-    if (envelope.seq.has_value()) {
-        std::cout << "  seq:         " << *envelope.seq << "\n";
+    if (not config.filter_module_type.empty()) {
+        filter.module_type = config.filter_module_type;
     }
-    for (const auto& [key, label] : envelope.labels) {
-        std::cout << "  label " << key << ": " << label << "\n";
+    if (not config.filter_set.empty()) {
+        filter.set = config.filter_set;
     }
-
-    for (const auto& [name, value] : envelope.values) {
-        std::cout << "  " << name << " = " << to_display_string(value);
-
-        const auto* definition = Everest::telemetry::find_entry(this->consumer->definitions(), envelope.module_id,
-                                                                envelope.set, name);
-        if (definition != nullptr) {
-            std::cout << " [" << Everest::telemetry::to_string(definition->type);
-            if (definition->unit.has_value()) {
-                std::cout << " " << *definition->unit;
-            }
-            std::cout << "]";
-        }
-        std::cout << "\n";
-    }
-
-    if (this->config.print_payload) {
-        std::cout << "  payload:     " << Everest::telemetry::to_payload(envelope).dump() << "\n";
-    }
-    std::cout << std::flush;
+    filter.entries = split_entries(config.filter_entries);
+    return filter;
 }
 
 void TelemetryConsumerExample::init() {
-    // The consumer library takes an MQTTAbstraction, which the module API does not expose, so this
-    // module opens a second connection to the same broker.
-    this->telemetry_mqtt = Everest::make_mqtt_abstraction(mqtt_settings_from_env());
-    if (not this->telemetry_mqtt->connect()) {
-        EVLOG_AND_THROW(Everest::EverestConfigError("TelemetryConsumerExample could not connect to the MQTT broker"));
-    }
-    this->telemetry_mqtt->spawn_main_loop_thread();
+    sink = std::make_unique<Everest::telemetry::Sink>(r_telemetry, info.id);
 
-    this->consumer = std::make_unique<Everest::telemetry::Consumer>(*this->telemetry_mqtt);
+    // Subscriptions belong in init: the snapshot a publisher sends when interest changes is a
+    // normal update, and it is gone if no handler is registered when it arrives.
+    sink->subscribe([this](const types::telemetry::Update& update) { this->log_update(update); });
+
+    EVLOG_info << "telemetry consumer: " << r_telemetry.size() << " set(s) wired";
 }
 
 void TelemetryConsumerExample::ready() {
-    Everest::telemetry::Filter filter;
-    if (not this->config.filter_module_id.empty()) {
-        filter.module_id = this->config.filter_module_id;
-    }
-    if (not this->config.filter_set.empty()) {
-        filter.set = this->config.filter_set;
+    const auto resolved = sink->resolve_definitions();
+    EVLOG_info << "telemetry consumer: " << resolved << " of " << r_telemetry.size()
+               << " set(s) answered get_definition";
+    if (config.print_definitions) {
+        log_definitions();
     }
 
-    this->subscription = this->consumer->subscribe(filter, [this](const Everest::telemetry::Envelope& envelope) {
-        this->print(envelope);
-    });
+    const auto filter = configured_filter();
+    const auto interested = sink->declare_interest(filter);
+    EVLOG_info << "telemetry consumer: declared interest in " << interested << " set(s)";
+    if (interested == 0) {
+        EVLOG_warning << "telemetry consumer: nothing matched the filter, so nothing will be published";
+    }
+}
 
-    std::cout << "TelemetryConsumerExample listening on " << this->subscription.topic() << std::endl;
+void TelemetryConsumerExample::log_definitions() const {
+    for (const auto& [key, definition] : sink->definitions()) {
+        std::stringstream entries;
+        for (const auto& entry : definition.entries) {
+            entries << " " << entry.name << ":" << types::telemetry::entry_type_to_string(entry.type);
+            if (entry.unit.has_value()) {
+                entries << "[" << *entry.unit << "]";
+            }
+        }
+        EVLOG_info << "telemetry definition " << key.to_string() << " (" << definition.module_type << ")"
+                   << (definition.max_publish_rate_hz.has_value()
+                           ? " max " + std::to_string(*definition.max_publish_rate_hz) + " Hz"
+                           : std::string{})
+                   << " entries:" << entries.str();
+    }
+}
+
+void TelemetryConsumerExample::log_update(const types::telemetry::Update& update) const {
+    const Everest::telemetry::SetKey key{update.module_id, update.set};
+
+    std::stringstream mapping;
+    if (update.mapping.has_value()) {
+        mapping << " evse=" << update.mapping->evse;
+        if (update.mapping->connector.has_value()) {
+            mapping << " connector=" << *update.mapping->connector;
+        }
+    }
+
+    std::stringstream values;
+    for (const auto& [entry, value] : update.values) {
+        values << " " << entry << "=" << value.dump();
+    }
+
+    EVLOG_info << "telemetry update " << key.to_string() << " (" << update.module_type << ")" << mapping.str() << " at "
+               << update.timestamp << ":" << values.str();
+
+    // What the sink knows, as opposed to what this message carried: de-duplication means an entry
+    // absent from an update is unchanged, not gone.
+    EVLOG_debug << "telemetry state " << key.to_string() << ": " << json(sink->values(key)).dump();
 }
 
 void TelemetryConsumerExample::shutdown() {
-    this->subscription.reset();
-    this->consumer.reset();
-    if (this->telemetry_mqtt) {
-        this->telemetry_mqtt->stop_message_handling();
-        this->telemetry_mqtt->disconnect();
+    if (sink) {
+        sink->withdraw();
     }
 }
 

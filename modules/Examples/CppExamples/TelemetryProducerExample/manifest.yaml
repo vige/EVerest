@@ -1,0 +1,26 @@
+description: >-
+  A stub telemetry publisher. Provides two telemetry sets, a fast one and a slow one, and drives them
+  from a simulator instead of hardware. It stands in for the producer-side framework helper while that
+  does not exist yet: interest tracking, de-duplication, rate capping and the snapshot on an interest
+  change are implemented in the module, not by the framework.
+config:
+  publish_interval_ms:
+    description: How often the simulator samples. The rate cap of each set applies on top.
+    type: integer
+    minimum: 10
+    default: 250
+  live_only:
+    description: Sample the livedata set only, leaving diagnostics silent.
+    type: boolean
+    default: false
+provides:
+  livedata:
+    interface: telemetry
+    description: Live electrical measurements
+  diagnostics:
+    interface: telemetry
+    description: Slow changing device diagnostics
+metadata:
+  license: https://opensource.org/licenses/Apache-2.0
+  authors:
+    - Kempower

@@ -1,12 +1,38 @@
-# Minimal SIL for developing the telemetry consumer library.
+# Minimal SIL for the telemetry consumer library.
 #
-# One module, no charging stack: TelemetryConsumerExample subscribes to the telemetry value flow
-# and prints every envelope it receives to stdout. Publish into the flow by hand with
-#   mosquitto_pub -t 'everest-telemetry/v1/<module_id>/<set>' -m '<payload>'
+# No charging stack: a stub producer publishes two telemetry sets, and TelemetryConsumerExample logs
+# what it is interested in. Telemetry travels as an ordinary interface variable, so the sets a sink
+# may consume are wired to it here, in connections, and it picks from them at runtime with
+# set_interest.
+#
+# Publishing by hand instead of running the producer. Note the doubly nested data: publish_var wraps
+# the value in {"data": value} and the envelope wraps that again.
+#   mosquitto_pub -t 'everest/modules/telemetry_producer/impl/livedata/var/update' -m '{
+#     "msg_type": "Var",
+#     "data": {"data": {"module_id": "telemetry_producer", "module_type": "TelemetryProducerExample",
+#                       "set": "livedata", "timestamp": "2026-09-09T10:41:07Z",
+#                       "mapping": {"evse": 1}, "values": {"temperature_C": 41.2}}}}'
 active_modules:
+  telemetry_producer:
+    module: TelemetryProducerExample
+    mapping:
+      module:
+        evse: 1
+    config_module:
+      publish_interval_ms: 500
+      live_only: false
+
   telemetry_consumer:
     module: TelemetryConsumerExample
     config_module:
       filter_module_id: ""
+      filter_module_type: ""
       filter_set: ""
-      print_payload: false
+      filter_entries: ""
+      print_definitions: true
+    connections:
+      telemetry:
+        - module_id: telemetry_producer
+          implementation_id: livedata
+        - module_id: telemetry_producer
+          implementation_id: diagnostics

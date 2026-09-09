@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright Pionix GmbH and Contributors to EVerest
+#ifndef TELEMETRY_PRODUCER_EXAMPLE_HPP
+#define TELEMETRY_PRODUCER_EXAMPLE_HPP
+
+//
+// AUTO GENERATED - MARKED REGIONS WILL BE KEPT
+// template version 3
+//
+
+#include "ld-ev.hpp"
+
+// headers for provided interface implementations
+#include <generated/interfaces/telemetry/Implementation.hpp>
+#include <generated/interfaces/telemetry/Implementation.hpp>
+
+
+// ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
+// insert your custom include headers here
+#include <atomic>
+#include <thread>
+
+#include "set_publisher.hpp"
+// ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
+
+namespace module {
+
+
+
+struct Conf {
+    int publish_interval_ms;
+    bool live_only;
+
+
+};
+
+class TelemetryProducerExample : public Everest::ModuleBase {
+public:
+    TelemetryProducerExample() = delete;
+    TelemetryProducerExample(
+        const ModuleInfo& info,
+        std::unique_ptr<telemetryImplBase> p_livedata,
+        std::unique_ptr<telemetryImplBase> p_diagnostics,
+        Conf& config
+    ) :
+        ModuleBase(info),
+        p_livedata(std::move(p_livedata)),
+        p_diagnostics(std::move(p_diagnostics)),
+        config(config)
+    {};
+
+    const std::unique_ptr<telemetryImplBase> p_livedata;
+    const std::unique_ptr<telemetryImplBase> p_diagnostics;
+    const Conf& config;
+
+    // ev@1fce4c5e-0ab8-41bb-90f7-14277703d2ac:v1
+    // insert your public definitions here
+
+    /// \brief Each implementation registers its publisher here in its own init(), so the simulator
+    /// can reach it without downcasting telemetryImplBase.
+    SetPublisher* livedata_publisher{nullptr};
+    SetPublisher* diagnostics_publisher{nullptr};
+    // ev@1fce4c5e-0ab8-41bb-90f7-14277703d2ac:v1
+
+protected:
+    // ev@4714b2ab-a24f-4b95-ab81-36439e1478de:v1
+    // insert your protected definitions here
+    // ev@4714b2ab-a24f-4b95-ab81-36439e1478de:v1
+
+private:
+    friend class LdEverest;
+    void init();
+    void ready();
+    void shutdown();
+
+    // ev@211cfdbe-f69a-4cd6-a4ec-f8aaa3d1b6c8:v1
+    // insert your private definitions here
+
+    /// \brief Samples both sets on a fixed interval. The rate cap of each set and the interest of
+    /// its subscribers decide what actually reaches the bus.
+    void simulate();
+
+    std::thread simulator;
+    std::atomic<bool> running{false};
+    // ev@211cfdbe-f69a-4cd6-a4ec-f8aaa3d1b6c8:v1
+
+};
+
+// ev@087e516b-124c-48df-94fb-109508c7cda9:v1
+// insert other definitions here
+// ev@087e516b-124c-48df-94fb-109508c7cda9:v1
+
+} // namespace module
+
+#endif // TELEMETRY_PRODUCER_EXAMPLE_HPP

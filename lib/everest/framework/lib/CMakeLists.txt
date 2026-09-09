@@ -44,8 +44,6 @@ target_sources(framework
         types.cpp
         serial.cpp
         status_fifo.cpp
-        telemetry/consumer.cpp
-        telemetry/types.cpp
         date.cpp
         runtime.cpp
         message_handler.cpp

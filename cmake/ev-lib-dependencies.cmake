@@ -42,6 +42,7 @@ set(EVEREST_LIB_SUBDIRS
     run_application
     slac
     sqlite
+    telemetry
     timer
     tls
     util
@@ -68,6 +69,7 @@ set(EVEREST_LIB_DEPS_slac "tls;fsm")
 # Tier 3 (framework-coupled)
 set(EVEREST_LIB_DEPS_helpers "tls;framework")
 set(EVEREST_LIB_DEPS_external_energy_limits "framework")
+set(EVEREST_LIB_DEPS_telemetry "framework")
 set(EVEREST_LIB_DEPS_everest_api_types "")
 set(EVEREST_LIB_DEPS_conversions "framework;evse_security")
 set(EVEREST_LIB_DEPS_ocpp_module_common "ocpp;conversions;framework")

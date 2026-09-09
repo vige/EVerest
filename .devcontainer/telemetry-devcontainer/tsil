@@ -7,7 +7,7 @@
 #   ./tsil exec <cmd...>   run one command in the container
 #   ./tsil compile         configure + build + install EVerest into /workspace/dist
 #   ./tsil run             run the telemetry SIL (manager, config-telemetry-sil)
-#   ./tsil pub [file]      publish one telemetry envelope (default: sample-envelope.json)
+#   ./tsil pub [file]      publish one telemetry update (default: sample-update.json)
 #   ./tsil down            stop everything
 set -euo pipefail
 
@@ -70,8 +70,8 @@ case "${cmd}" in
                 --config /workspace/dist/etc/everest/config-telemetry-sil.yaml"
         ;;
     pub)
-        payload_file="${1:-${SCRIPT_DIR}/sample-envelope.json}"
-        topic="${TOPIC:-everest-telemetry/v1/powermeter_1/livedata}"
+        payload_file="${1:-${SCRIPT_DIR}/sample-update.json}"
+        topic="${TOPIC:-everest/modules/telemetry_producer/impl/livedata/var/update}"
         dc exec -T mqtt-server mosquitto_pub -h localhost -t "${topic}" -s < "${payload_file}"
         echo "published to ${topic}"
         ;;
