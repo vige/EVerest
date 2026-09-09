@@ -1,0 +1,12 @@
+# Minimal SIL for developing the telemetry consumer library.
+#
+# One module, no charging stack: TelemetryConsumerExample subscribes to the telemetry value flow
+# and prints every envelope it receives to stdout. Publish into the flow by hand with
+#   mosquitto_pub -t 'everest-telemetry/v1/<module_id>/<set>' -m '<payload>'
+active_modules:
+  telemetry_consumer:
+    module: TelemetryConsumerExample
+    config_module:
+      filter_module_id: ""
+      filter_set: ""
+      print_payload: false

@@ -1,0 +1,21 @@
+description: >-
+  Prints every EVerest telemetry envelope it receives to stdout. A debugging consumer for the
+  telemetry consumer library: it declares no interfaces, so it can be dropped into any config.
+config:
+  filter_module_id:
+    description: Only receive telemetry from this module id. Empty string means every module.
+    type: string
+    default: ""
+  filter_set:
+    description: Only receive this telemetry set. Empty string means every set.
+    type: string
+    default: ""
+  print_payload:
+    description: Also print the envelope as it arrived on the wire.
+    type: boolean
+    default: false
+enable_external_mqtt: true
+metadata:
+  license: https://opensource.org/licenses/Apache-2.0
+  authors:
+    - Kempower

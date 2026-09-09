@@ -1,0 +1,11 @@
+# Third compose layer on top of the standard EVerest devcontainer: only the broker and the
+# devcontainer itself, and the broker on host ports that do not collide with a native mosquitto.
+services:
+  mqtt-server:
+    ports: !override
+      - "${MQTT_HOST_PORT:-11883}:1883"
+      - "${MQTT_WS_HOST_PORT:-19001}:9001"
+
+  devcontainer:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
