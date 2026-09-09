@@ -26,26 +26,25 @@ void TelemetryProducerExample::simulate() {
         std::this_thread::sleep_for(interval);
         ++tick;
 
-        // Nothing is published while nobody is interested, so nothing needs sampling either. This
-        // is the one place a driver has to care about interest, and only to save its own work.
-        if (p_livedata->any_interest()) {
-            const double phase = static_cast<double>(tick) / 10.0;
-            livedata::Sample sample;
-            sample.temperature_C = 40.0 + std::sin(phase);
-            sample.frequency_Hz = 50.0 + 0.02 * std::cos(phase);
-            sample.current_A = std::round(100.0 * std::abs(std::sin(phase / 3.0))) / 10.0;
-            sample.fw_state = tick % 20 == 0 ? livedata::FwState::Idle : livedata::FwState::Measuring;
-            p_livedata->publish(sample);
-        }
+        // publish() is a no-op while nobody is interested, so there is no guard here. A driver
+        // whose sampling costs a bus transaction can ask any_interest() first and skip that work;
+        // reading a sine wave is not worth the branch.
+        const double phase = static_cast<double>(tick) / 10.0;
+        livedata::Sample live;
+        live.temperature_C = 40.0 + std::sin(phase);
+        live.frequency_Hz = 50.0 + 0.02 * std::cos(phase);
+        live.current_A = std::round(100.0 * std::abs(std::sin(phase / 3.0))) / 10.0;
+        live.fw_state = tick % 20 == 0 ? livedata::FwState::Idle : livedata::FwState::Measuring;
+        p_livedata->publish(live);
 
         // Diagnostics change slowly on purpose: de-duplication means most of these ticks publish
         // nothing at all, which is what the consumer side has to cope with.
-        if (not config.live_only and p_diagnostics->any_interest()) {
-            diagnostics::Sample sample;
-            sample.uptime_s = static_cast<int>(tick * config.publish_interval_ms / 1000);
-            sample.error_count = 0;
-            sample.serial = "STUB-0001";
-            p_diagnostics->publish(sample);
+        if (not config.live_only) {
+            diagnostics::Sample slow;
+            slow.uptime_s = static_cast<int>(tick * config.publish_interval_ms / 1000);
+            slow.error_count = 0;
+            slow.serial = "STUB-0001";
+            p_diagnostics->publish(slow);
         }
     }
 }

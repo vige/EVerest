@@ -3,6 +3,7 @@ add_executable(${TEST_TARGET_NAME})
 
 target_sources(${TEST_TARGET_NAME}
     PRIVATE
+    set_publisher_test.cpp
     sink_test.cpp
 )
 
