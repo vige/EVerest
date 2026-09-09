@@ -14,10 +14,12 @@
 #include <generated/types/telemetry.hpp>
 #include <utils/date.hpp>
 
-namespace module {
+namespace Everest::telemetry {
 
-/// \brief The producer-side behaviour of one telemetry set, in the module because the framework does
-/// not offer it yet.
+/// \brief The producer-side behaviour of one telemetry set.
+///
+/// A publishing implementation owns one of these. Client code never sees the interest table: it
+/// declares a set, offers samples, and this decides what reaches the bus.
 ///
 /// Four things the design note asks of a publisher, and nothing else:
 ///
@@ -36,8 +38,16 @@ class SetPublisher {
 public:
     using Publish = std::function<void(const types::telemetry::Update&)>;
 
-    SetPublisher(types::telemetry::SetDefinition definition, std::string module_id, Publish publish) :
-        m_definition(std::move(definition)), m_module_id(std::move(module_id)), m_publish(std::move(publish)) {
+    SetPublisher(types::telemetry::SetDefinition definition, Publish publish) :
+        m_definition(std::move(definition)), m_publish(std::move(publish)) {
+    }
+
+    /// \brief Names the publishing module instance, for the attribution the payload carries.
+    ///
+    /// An implementation is constructed before the framework hands the module its info, so this
+    /// arrives later, from the module loader.
+    void set_module_id(std::string module_id) {
+        m_module_id = std::move(module_id);
     }
 
     void set_mapping(std::optional<types::telemetry::Mapping> mapping) {
@@ -154,7 +164,7 @@ private:
         update.module_id = m_module_id;
         update.module_type = m_definition.module_type;
         update.set = m_definition.set;
-        update.timestamp = Everest::Date::to_rfc3339(date::utc_clock::now());
+        update.timestamp = ::Everest::Date::to_rfc3339(date::utc_clock::now());
         update.mapping = m_mapping;
         update.values = std::move(values);
         return update;
@@ -177,7 +187,7 @@ private:
     }
 
     const types::telemetry::SetDefinition m_definition;
-    const std::string m_module_id;
+    std::string m_module_id;
     const Publish m_publish;
 
     mutable std::mutex m_mutex;
@@ -203,4 +213,4 @@ inline types::telemetry::EntryDefinition entry_of(const std::string& name, const
     return entry;
 }
 
-} // namespace module
+} // namespace Everest::telemetry

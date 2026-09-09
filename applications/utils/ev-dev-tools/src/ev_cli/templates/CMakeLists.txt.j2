@@ -7,10 +7,11 @@ ev_setup_cpp_module()
 
 {{ insert_block(info.blocks.add_general) }}
 
-{% if provides %}
+{% set hand_written = provides | rejectattr('generated_impl') | list %}
+{% if hand_written %}
 target_sources(${MODULE_NAME}
     PRIVATE
-        {% for impl in provides %}
+        {% for impl in hand_written %}
         "{{ impl.cpp_file_rel_path }}"
         {% endfor %}
 )

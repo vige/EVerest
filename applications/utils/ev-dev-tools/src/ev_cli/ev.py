@@ -55,6 +55,7 @@ def setup_jinja_env():
         'module.cpp': env.get_template('module.cpp.j2'),
         'ld-ev.hpp': env.get_template('ld-ev.hpp.j2'),
         'ld-ev.cpp': env.get_template('ld-ev.cpp.j2'),
+        'telemetry-publisher.hpp': env.get_template('telemetry-publisher.hpp.j2'),
         'cmakelists': env.get_template('CMakeLists.txt.j2'),
         'index.rst': env.get_template('index.rst.j2'),
     })
@@ -166,7 +167,7 @@ def generate_tmpl_data_for_module(module, module_def):
             if add:
                 config.append(type_info)
 
-        provides.append({
+        impl_data = {
             'id': impl,
             'type': impl_info['interface'],
             'desc': impl_info['description'],
@@ -174,8 +175,19 @@ def generate_tmpl_data_for_module(module, module_def):
             'rwconfig': rwconfig,
             'class_name': f'{impl_info["interface"]}Impl',
             'base_class': f'{impl_info["interface"]}ImplBase',
-            'base_class_header': f'generated/interfaces/{impl_info["interface"]}/Implementation.hpp'
-        })
+            'base_class_header': f'generated/interfaces/{impl_info["interface"]}/Implementation.hpp',
+            'generated_impl': False
+        }
+
+        # A telemetry implementation that declares its set in the manifest is generated whole: the
+        # publisher, the typed sample and the two command handlers. There is no hand-written
+        # implementation to scaffold, and none to keep in step with the declaration.
+        if 'telemetry' in impl_info:
+            impl_data['telemetry'] = helpers.build_telemetry_set_info(impl, impl_info)
+            impl_data['class_name'] = 'telemetryPublisher'
+            impl_data['generated_impl'] = True
+
+        provides.append(impl_data)
 
     requires = []
     for requirement_id, req_info in module_def.get('requires', {}).items():
@@ -235,6 +247,10 @@ def construct_impl_file_paths(impl):
 def set_impl_specific_path_vars(tmpl_data, output_path):
     """Set cpp_file_rel_path and class_header vars to implementation template data."""
     for impl in tmpl_data['provides']:
+        if impl.get('generated_impl'):
+            # lives next to ld-ev, not in the module source tree
+            impl['class_header'] = f'telemetry_{impl["id"]}.hpp'
+            continue
         (impl['class_header'], impl['cpp_file_rel_path']) = construct_impl_file_paths(impl)
 
 
@@ -272,6 +288,24 @@ def generate_module_loader_files(rel_mod_dir, output_dir):
         'template_path': Path(templates['ld-ev.cpp'].filename),
         'last_mtime': mod_path.stat().st_mtime
     })
+
+    # one generated publisher per implementation that declares a telemetry set
+    for impl in tmpl_data['provides']:
+        if not impl.get('generated_impl'):
+            continue
+        filename = f'telemetry_{impl["id"]}.hpp'
+        publisher_data = dict(tmpl_data)
+        publisher_data['impl'] = impl
+        publisher_data['info'] = dict(tmpl_data['info'])
+        publisher_data['info']['hpp_guard'] = f'TELEMETRY_{impl["id"].upper()}_HPP'
+        loader_files.append({
+            'filename': filename,
+            'path': output_dir / mod / filename,
+            'printable_name': f'{mod}/{filename}',
+            'content': templates['telemetry-publisher.hpp'].render(publisher_data),
+            'template_path': Path(templates['telemetry-publisher.hpp'].filename),
+            'last_mtime': mod_path.stat().st_mtime
+        })
 
     return loader_files
 
@@ -374,6 +408,10 @@ def generate_module_files(rel_mod_dir, update_flag, licenses):
 
     # provided interface implementations (impl cpp & hpp)
     for impl in tmpl_data['provides']:
+        if impl.get('generated_impl'):
+            # a telemetry set declared in the manifest is generated whole, so there is nothing to
+            # scaffold and nothing for anybody to edit
+            continue
         interface = impl['type']
         (impl_hpp_file, impl_cpp_file) = construct_impl_file_paths(impl)
 
@@ -633,7 +671,8 @@ def module_genld(args):
 def module_get_templates(args):
     interface_files = args.separator.join(
         [templates['ld-ev.hpp'].filename,
-         templates['ld-ev.cpp'].filename])
+         templates['ld-ev.cpp'].filename,
+         templates['telemetry-publisher.hpp'].filename])
 
     print(f'{interface_files}')
 

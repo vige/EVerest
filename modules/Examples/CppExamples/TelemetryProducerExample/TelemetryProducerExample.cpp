@@ -9,14 +9,11 @@
 namespace module {
 
 void TelemetryProducerExample::init() {
-    invoke_init(*p_livedata);
-    invoke_init(*p_diagnostics);
+    // Nothing to initialise: both implementations are generated from the manifest declaration and
+    // answer get_definition and set_interest on their own.
 }
 
 void TelemetryProducerExample::ready() {
-    invoke_ready(*p_livedata);
-    invoke_ready(*p_diagnostics);
-
     running = true;
     simulator = std::thread([this] { this->simulate(); });
 }
@@ -29,25 +26,26 @@ void TelemetryProducerExample::simulate() {
         std::this_thread::sleep_for(interval);
         ++tick;
 
-        if (livedata_publisher != nullptr and not livedata_publisher->wanted().empty()) {
+        // Nothing is published while nobody is interested, so nothing needs sampling either. This
+        // is the one place a driver has to care about interest, and only to save its own work.
+        if (p_livedata->any_interest()) {
             const double phase = static_cast<double>(tick) / 10.0;
-            livedata_publisher->offer({
-                {"temperature_C", 40.0 + std::sin(phase)},
-                {"frequency_Hz", 50.0 + 0.02 * std::cos(phase)},
-                {"current_A", std::round(100.0 * std::abs(std::sin(phase / 3.0))) / 10.0},
-                {"fw_state", tick % 20 == 0 ? "Idle" : "Measuring"},
-            });
+            livedata::Sample sample;
+            sample.temperature_C = 40.0 + std::sin(phase);
+            sample.frequency_Hz = 50.0 + 0.02 * std::cos(phase);
+            sample.current_A = std::round(100.0 * std::abs(std::sin(phase / 3.0))) / 10.0;
+            sample.fw_state = tick % 20 == 0 ? livedata::FwState::Idle : livedata::FwState::Measuring;
+            p_livedata->publish(sample);
         }
 
         // Diagnostics change slowly on purpose: de-duplication means most of these ticks publish
         // nothing at all, which is what the consumer side has to cope with.
-        if (not config.live_only and diagnostics_publisher != nullptr and
-            not diagnostics_publisher->wanted().empty()) {
-            diagnostics_publisher->offer({
-                {"uptime_s", static_cast<std::int64_t>(tick * config.publish_interval_ms / 1000)},
-                {"error_count", 0},
-                {"serial", "STUB-0001"},
-            });
+        if (not config.live_only and p_diagnostics->any_interest()) {
+            diagnostics::Sample sample;
+            sample.uptime_s = static_cast<int>(tick * config.publish_interval_ms / 1000);
+            sample.error_count = 0;
+            sample.serial = "STUB-0001";
+            p_diagnostics->publish(sample);
         }
     }
 }

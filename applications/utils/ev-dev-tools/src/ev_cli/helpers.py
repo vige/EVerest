@@ -163,6 +163,53 @@ def build_type_info(name, json_type):
     return ti
 
 
+telemetry_cpp_type_map = {
+    'boolean': 'bool',
+    'integer': 'int',
+    'number': 'double',
+    'string': 'std::string',
+}
+
+
+def pascal_case(name: str) -> str:
+    """entry name to a C++ type name: fw_state -> FwState"""
+    return ''.join(part[:1].upper() + part[1:] for part in name.split('_') if part)
+
+
+def build_telemetry_set_info(impl_id, impl_info):
+    """Flatten a manifest telemetry block into what the publisher template needs.
+
+    The manifest keys entries by name and the generated code wants them ordered, typed and with a
+    C++ spelling per entry. A string entry with an `enum` gets its own generated enum class, which is
+    the one place the declaration buys more than a runtime check.
+    """
+    block = impl_info['telemetry']
+    entries = []
+    for name, entry in block['entries'].items():
+        info = {
+            'name': name,
+            'description': entry['description'],
+            'type': entry['type'],
+            'cpp_type': telemetry_cpp_type_map[entry['type']],
+            'unit': entry.get('unit'),
+            'minimum': entry.get('minimum'),
+            'maximum': entry.get('maximum'),
+            'values_list': entry.get('enum'),
+        }
+        if info['values_list']:
+            info['enum_type'] = pascal_case(name)
+            info['cpp_type'] = info['enum_type']
+        entries.append(info)
+
+    return {
+        'set': impl_id,
+        'description': block.get('description', impl_info['description']),
+        'max_publish_rate_hz': block.get('max_publish_rate_hz'),
+        'entries': entries,
+        'enums': [e for e in entries if 'enum_type' in e],
+    }
+
+
 type_headers = set()
 parsed_types: List = []
 parsed_enums: List = []

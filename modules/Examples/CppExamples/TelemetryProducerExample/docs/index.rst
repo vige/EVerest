@@ -4,18 +4,32 @@
 TelemetryProducerExample
 *************************
 
-A stub telemetry publisher, for developing and demonstrating the consumer side while the
-producer-side framework helper does not exist yet.
+A telemetry publisher whose two sets, ``livedata`` and ``diagnostics``, are declared in its
+manifest. It samples a simulator instead of hardware, so it stands in for a driver without needing
+one.
 
-It provides two implementations of the ``telemetry`` interface, ``livedata`` (capped at 4 Hz) and
-``diagnostics`` (capped at 0.2 Hz), and drives them from a simulator thread instead of hardware.
+There is no implementation directory. Both implementations are generated from the manifest
+declaration, which means the module answers neither ``get_definition`` nor ``set_interest``, and
+keeps no interest table, no last-value cache and no rate cap of its own. All of that lives in
+``Everest::telemetry::SetPublisher``.
 
-``set_publisher.hpp`` implements what the framework will do later:
+What the module writes is the sampling:
 
-* an interest table keyed by subscriber, and publishing only the union over all of them,
-* a last-value cache with exact-equality de-duplication, so an unchanged value is not re-published,
-* a producer-side rate cap from ``max_publish_rate_hz``,
-* a snapshot of the requested entries whenever a subscriber declares interest.
+.. code-block:: cpp
 
-Nothing is published while no subscriber is interested, and the simulator skips sampling entirely in
-that case.
+   livedata::Sample sample;
+   sample.temperature_C = 40.0 + std::sin(phase);
+   sample.fw_state = livedata::FwState::Measuring;
+   p_livedata->publish(sample);
+
+``Sample``, the ``FwState`` enum and the per-entry ``publish_<entry>()`` overloads all come from the
+``telemetry`` block in ``manifest.yaml``.
+
+The one thing a driver still sees of the protocol is ``p_livedata->any_interest()``, and only so it
+can skip sampling its own hardware while nobody is listening.
+
+Config:
+
+* ``publish_interval_ms`` - how often the simulator samples. Each set's ``max_publish_rate_hz``
+  applies on top.
+* ``live_only`` - sample the livedata set only, leaving diagnostics silent.

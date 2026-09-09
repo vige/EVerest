@@ -11,7 +11,11 @@
 {% if loop.first %}
 // headers for provided interface implementations
 {% endif %}
+{% if impl.generated_impl %}
+#include <{{ impl.class_header }}>
+{% else %}
 #include <{{ impl.base_class_header }}>
+{% endif %}
 {% endfor %}
 
 {% for interface in requires %}
@@ -99,7 +103,11 @@ public:
         Everest::TelemetryProvider& telemetry,
         {% endif %}
         {% for impl in provides %}
+        {% if impl.generated_impl %}
+        std::unique_ptr<{{ impl.id }}::{{ impl.class_name }}> p_{{ impl.id }},
+        {% else %}
         std::unique_ptr<{{ impl.base_class }}> p_{{ impl.id }},
+        {% endif %}
         {% endfor %}
         {% for requirement in requires %}
         {% if requirement.is_vector %}
@@ -143,7 +151,11 @@ public:
     Everest::TelemetryProvider& telemetry;
     {% endif %}
     {% for impl in provides %}
+    {% if impl.generated_impl %}
+    const std::unique_ptr<{{ impl.id }}::{{ impl.class_name }}> p_{{ impl.id }};
+    {% else %}
     const std::unique_ptr<{{ impl.base_class }}> p_{{ impl.id }};
+    {% endif %}
     {% endfor %}
     {% for requirement in requires %}
     {% if requirement.is_vector %}

@@ -1,8 +1,8 @@
 description: >-
-  A stub telemetry publisher. Provides two telemetry sets, a fast one and a slow one, and drives them
-  from a simulator instead of hardware. It stands in for the producer-side framework helper while that
-  does not exist yet: interest tracking, de-duplication, rate capping and the snapshot on an interest
-  change are implemented in the module, not by the framework.
+  A telemetry publisher whose two sets are declared in this manifest. Both implementations are
+  generated from those declarations: the module writes no interface code, answers no commands and
+  keeps no interest table. It samples a simulator instead of hardware, so it stands in for a driver
+  without needing one.
 config:
   publish_interval_ms:
     description: How often the simulator samples. The rate cap of each set applies on top.
@@ -17,9 +17,49 @@ provides:
   livedata:
     interface: telemetry
     description: Live electrical measurements
+    telemetry:
+      max_publish_rate_hz: 4
+      entries:
+        temperature_C:
+          description: Board temperature
+          type: number
+          unit: Celsius
+          minimum: -40
+          maximum: 120
+        frequency_Hz:
+          description: Grid frequency
+          type: number
+          unit: Hz
+          minimum: 45
+          maximum: 55
+        current_A:
+          description: Output current
+          type: number
+          unit: A
+          minimum: 0
+          maximum: 500
+        fw_state:
+          description: Firmware state
+          type: string
+          enum: [Idle, Measuring, Error]
   diagnostics:
     interface: telemetry
     description: Slow changing device diagnostics
+    telemetry:
+      max_publish_rate_hz: 0.2
+      entries:
+        uptime_s:
+          description: Seconds since the module started
+          type: integer
+          unit: s
+          minimum: 0
+        error_count:
+          description: Errors since the module started
+          type: integer
+          minimum: 0
+        serial:
+          description: Device serial number
+          type: string
 metadata:
   license: https://opensource.org/licenses/Apache-2.0
   authors:

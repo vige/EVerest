@@ -11,16 +11,14 @@
 #include "ld-ev.hpp"
 
 // headers for provided interface implementations
-#include <generated/interfaces/telemetry/Implementation.hpp>
-#include <generated/interfaces/telemetry/Implementation.hpp>
+#include <telemetry_livedata.hpp>
+#include <telemetry_diagnostics.hpp>
 
 
 // ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
 // insert your custom include headers here
 #include <atomic>
 #include <thread>
-
-#include "set_publisher.hpp"
 // ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
 
 namespace module {
@@ -39,8 +37,8 @@ public:
     TelemetryProducerExample() = delete;
     TelemetryProducerExample(
         const ModuleInfo& info,
-        std::unique_ptr<telemetryImplBase> p_livedata,
-        std::unique_ptr<telemetryImplBase> p_diagnostics,
+        std::unique_ptr<livedata::telemetryPublisher> p_livedata,
+        std::unique_ptr<diagnostics::telemetryPublisher> p_diagnostics,
         Conf& config
     ) :
         ModuleBase(info),
@@ -49,17 +47,12 @@ public:
         config(config)
     {};
 
-    const std::unique_ptr<telemetryImplBase> p_livedata;
-    const std::unique_ptr<telemetryImplBase> p_diagnostics;
+    const std::unique_ptr<livedata::telemetryPublisher> p_livedata;
+    const std::unique_ptr<diagnostics::telemetryPublisher> p_diagnostics;
     const Conf& config;
 
     // ev@1fce4c5e-0ab8-41bb-90f7-14277703d2ac:v1
     // insert your public definitions here
-
-    /// \brief Each implementation registers its publisher here in its own init(), so the simulator
-    /// can reach it without downcasting telemetryImplBase.
-    SetPublisher* livedata_publisher{nullptr};
-    SetPublisher* diagnostics_publisher{nullptr};
     // ev@1fce4c5e-0ab8-41bb-90f7-14277703d2ac:v1
 
 protected:

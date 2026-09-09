@@ -1,0 +1,193 @@
+{% from "helper_macros.j2" import print_template_info, print_spdx_line %}
+{{ print_spdx_line('Apache-2.0') }}
+#ifndef {{ info.hpp_guard }}
+#define {{ info.hpp_guard }}
+
+{{ print_template_info('1') }}
+
+#include <optional>
+#include <set>
+#include <string>
+#include <vector>
+
+#include <everest/telemetry/set_publisher.hpp>
+#include <generated/interfaces/telemetry/Implementation.hpp>
+
+/// \file
+/// \brief The telemetry set "{{ impl.telemetry.set }}", generated from the manifest declaration of
+/// module {{ info.name }}.
+///
+/// Client code declares nothing and answers nothing: `get_definition` is served from the declaration
+/// below and `set_interest` goes to the publisher, which owns the interest table, the last-value
+/// cache and the rate cap. A module offers a Sample and the publisher decides what reaches the bus.
+
+namespace module {
+namespace {{ impl.id }} {
+
+{% for entry in impl.telemetry.enums %}
+/// \brief Allowed values of the "{{ entry.name }}" entry
+enum class {{ entry.enum_type }} {
+    {% for value in entry.values_list %}
+    {{ value }},
+    {% endfor %}
+};
+
+/// \returns the declared spelling of \p e
+inline std::string {{ entry.enum_type | snake_case }}_to_string(const {{ entry.enum_type }}& e) {
+    switch (e) {
+    {% for value in entry.values_list %}
+    case {{ entry.enum_type }}::{{ value }}:
+        return "{{ value }}";
+    {% endfor %}
+    }
+    throw std::out_of_range("No known string conversion for provided enum of type {{ entry.enum_type }}");
+}
+
+{% endfor %}
+struct Conf {
+    {% for item in impl.config %}
+    {{ item.cpp_type }} {{ item.name }};
+    {% endfor %}
+};
+
+/// \brief One offer to the set.
+///
+/// Every member is optional: an entry left unset is not part of this sample, which is not the same
+/// as having changed to nothing. Setting several members publishes them in one message, which is the
+/// atomic unit a subscriber sees.
+struct Sample {
+    {% for entry in impl.telemetry.entries %}
+    std::optional<{{ entry.cpp_type }}> {{ entry.name }}; ///< {{ entry.description }}{{ ' [' + entry.unit + ']' if entry.unit }}
+    {% endfor %}
+};
+
+class telemetryPublisher : public telemetryImplBase {
+public:
+    telemetryPublisher() = delete;
+    telemetryPublisher(Everest::ModuleAdapter* ev, const std::string& name, Conf& config) :
+        telemetryImplBase(ev, name),
+        config(config),
+        publisher(declaration(), [this](const types::telemetry::Update& update) { this->publish_update(update); }) {
+        if (const auto mapping = this->get_mapping(); mapping.has_value()) {
+            types::telemetry::Mapping telemetry_mapping;
+            telemetry_mapping.evse = mapping->evse;
+            telemetry_mapping.connector = mapping->connector;
+            publisher.set_mapping(telemetry_mapping);
+        }
+    }
+
+    /// \brief The declaration of this set, as the manifest spells it.
+    static types::telemetry::SetDefinition declaration() {
+        types::telemetry::SetDefinition definition;
+        definition.module_type = "{{ info.name }}";
+        definition.set = "{{ impl.telemetry.set }}";
+        definition.description = "{{ impl.telemetry.description }}";
+        {% if impl.telemetry.max_publish_rate_hz is not none %}
+        definition.max_publish_rate_hz = {{ impl.telemetry.max_publish_rate_hz }};
+        {% endif %}
+
+        {% for entry in impl.telemetry.entries %}
+        {
+            types::telemetry::EntryDefinition entry;
+            entry.name = "{{ entry.name }}";
+            entry.description = "{{ entry.description }}";
+            entry.type = types::telemetry::EntryType::{{ entry.type }};
+            {% if entry.unit is not none %}
+            entry.unit = "{{ entry.unit }}";
+            {% endif %}
+            {% if entry.minimum is not none %}
+            entry.minimum = {{ entry.minimum }};
+            {% endif %}
+            {% if entry.maximum is not none %}
+            entry.maximum = {{ entry.maximum }};
+            {% endif %}
+            {% if entry.values_list %}
+            entry.values_list = std::vector<std::string>{
+                {% for value in entry.values_list %}
+                "{{ value }}",
+                {% endfor %}
+            };
+            {% endif %}
+            definition.entries.push_back(entry);
+        }
+        {% endfor %}
+
+        return definition;
+    }
+
+    /// \brief Offers \p sample to the set.
+    ///
+    /// What is published is the wanted, changed subset of it, and nothing at all while no subscriber
+    /// is interested, the rate cap has not elapsed, or nothing has changed.
+    /// \returns true when an update was published
+    bool publish(const Sample& sample) {
+        json::object_t values;
+        {% for entry in impl.telemetry.entries %}
+        if (sample.{{ entry.name }}.has_value()) {
+            {% if entry.enum_type is defined %}
+            values["{{ entry.name }}"] = {{ entry.enum_type | snake_case }}_to_string(*sample.{{ entry.name }});
+            {% else %}
+            values["{{ entry.name }}"] = *sample.{{ entry.name }};
+            {% endif %}
+        }
+        {% endfor %}
+        return publisher.offer(values);
+    }
+
+    {% for entry in impl.telemetry.entries %}
+    /// \brief Offers "{{ entry.name }}" on its own. {{ entry.description }}
+    bool publish_{{ entry.name }}(const {{ entry.cpp_type }}& value) {
+        Sample sample;
+        sample.{{ entry.name }} = value;
+        return publish(sample);
+    }
+
+    {% endfor %}
+    /// \returns the entries at least one subscriber wants
+    std::set<std::string> wanted() const {
+        return publisher.wanted();
+    }
+
+    /// \returns true while at least one subscriber wants at least one entry. A module can skip
+    /// sampling entirely while this is false.
+    bool any_interest() const {
+        return not publisher.wanted().empty();
+    }
+
+    /// \brief Names the publishing module instance. Called by the module loader, not by client code.
+    void bind_module_id(const std::string& module_id) {
+        publisher.set_module_id(module_id);
+    }
+
+protected:
+    types::telemetry::SetDefinition handle_get_definition() override {
+        return publisher.definition();
+    }
+
+    void handle_set_interest(std::string& module_id, Array& entries) override {
+        std::vector<std::string> wanted_entries;
+        wanted_entries.reserve(entries.size());
+        for (const auto& entry : entries) {
+            wanted_entries.push_back(entry.get<std::string>());
+        }
+        publisher.set_interest(module_id, wanted_entries);
+    }
+
+private:
+    void init() override {
+    }
+
+    void ready() override {
+    }
+
+    void shutdown() override {
+    }
+
+    const Conf& config;
+    Everest::telemetry::SetPublisher publisher;
+};
+
+} // namespace {{ impl.id }}
+} // namespace module
+
+#endif // {{ info.hpp_guard }}

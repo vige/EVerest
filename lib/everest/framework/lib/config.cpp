@@ -604,6 +604,40 @@ std::map<std::string, std::vector<Fulfillment>> ConfigBase::get_fulfillments(std
 }
 
 // ManagerConfig
+/// \brief Checks a telemetry set declaration for the things the JSON schema cannot express: bounds
+/// belong to numeric entries and an allowed-value list to string entries.
+static void validate_telemetry_declaration(const std::string& module_name, const std::string& impl_id,
+                                           const json& declaration) {
+    for (const auto& entry : declaration.at("entries").items()) {
+        const auto& type = entry.value().at("type").get<std::string>();
+        const auto numeric = (type == "integer" or type == "number");
+
+        const auto reject = [&](const std::string& what, const std::string& allowed) {
+            EVLOG_AND_THROW(EverestConfigError(
+                fmt::format("Telemetry entry '{}' of implementation '{}' in module '{}' is of type '{}' and declares "
+                            "'{}', which is only allowed on {} entries!",
+                            entry.key(), impl_id, module_name, type, what, allowed)));
+        };
+
+        if (not numeric and entry.value().contains("minimum")) {
+            reject("minimum", "integer and number");
+        }
+        if (not numeric and entry.value().contains("maximum")) {
+            reject("maximum", "integer and number");
+        }
+        if (type != "string" and entry.value().contains("enum")) {
+            reject("enum", "string");
+        }
+        if (entry.value().contains("minimum") and entry.value().contains("maximum") and
+            entry.value().at("minimum").get<double>() > entry.value().at("maximum").get<double>()) {
+            EVLOG_AND_THROW(EverestConfigError(
+                fmt::format("Telemetry entry '{}' of implementation '{}' in module '{}' declares a minimum above its "
+                            "maximum!",
+                            entry.key(), impl_id, module_name)));
+        }
+    }
+}
+
 void ManagerConfig::load_and_validate_manifest(ModuleConfig& module_config) {
     const auto module_id = module_config.module_id;
     const auto module_name = module_config.module_name;
@@ -658,6 +692,21 @@ void ManagerConfig::load_and_validate_manifest(ModuleConfig& module_config) {
     for (const auto& impl_id : provided_impls) {
         EVLOG_debug << fmt::format("Loading interface for implementation: {}", impl_id);
         auto intf_name = m_manifests[module_name]["provides"][impl_id]["interface"].get<std::string>();
+
+        // The manifest schema cannot express "this block only with that interface", so the gate is
+        // here: a telemetry declaration on anything but a telemetry implementation is a mistake that
+        // would otherwise be silently ignored.
+        const auto& impl = m_manifests[module_name]["provides"][impl_id];
+        if (impl.contains("telemetry") and intf_name != "telemetry") {
+            EVLOG_AND_THROW(EverestConfigError(
+                fmt::format("Implementation '{}' of module '{}' declares a 'telemetry' block, which is only allowed "
+                            "on an implementation of the 'telemetry' interface, not of '{}'!",
+                            impl_id, module_name, intf_name)));
+        }
+        if (impl.contains("telemetry")) {
+            validate_telemetry_declaration(module_name, impl_id, impl.at("telemetry"));
+        }
+
         m_interfaces[module_name][impl_id] = intf_name;
         resolve_interface(intf_name);
     }

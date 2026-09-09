@@ -37,6 +37,47 @@ pub struct ProvidesEntry {
     pub description: String,
     #[serde(default)]
     pub config: BTreeMap<String, ConfigEntry>,
+
+    /// The telemetry set this implementation publishes, declared in the manifest. Only valid
+    /// together with `interface: telemetry`, which the manager checks. Optional by design: a
+    /// module whose telemetry depends on its configuration declares its entries in code.
+    #[serde(default)]
+    pub telemetry: Option<TelemetrySet>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetrySet {
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub max_publish_rate_hz: Option<f64>,
+    pub entries: BTreeMap<String, TelemetryEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryEntry {
+    pub description: String,
+    #[serde(rename = "type")]
+    pub data_type: TelemetryEntryType,
+    #[serde(default)]
+    pub unit: Option<String>,
+    #[serde(default)]
+    pub minimum: Option<f64>,
+    #[serde(default)]
+    pub maximum: Option<f64>,
+    #[serde(default, rename = "enum")]
+    pub values_list: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TelemetryEntryType {
+    Boolean,
+    Integer,
+    Number,
+    String,
 }
 
 #[derive(Debug, Deserialize)]

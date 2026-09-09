@@ -39,6 +39,11 @@ static {{ impl.id }}::Conf {{ impl.id }}_config({{ impl.id }}_rwconfig);
 static {{ impl.id }}::{{ impl.class_name }}* {{ impl.id }}_impl_p{nullptr};
 {% else %}
 static {{ impl.id }}::Conf {{ impl.id }}_config;
+{% if impl.generated_impl %}
+// a generated telemetry publisher is constructed before the module knows its own id, so the loader
+// hands it over in init()
+static {{ impl.id }}::{{ impl.class_name }}* {{ impl.id }}_impl_p{nullptr};
+{% endif %}
 {% endif %}
 {% endfor %}
 {% if info.module_rwconfig|length > 0 %}
@@ -91,6 +96,14 @@ void LdEverest::init(ModuleConfigs module_configs, const ModuleInfo& mod_info) {
     {% endfor %}
 
     module_info = mod_info;
+
+    {% for impl in provides %}
+    {% if impl.generated_impl %}
+    if ({{ impl.id }}_impl_p != nullptr) {
+        {{ impl.id }}_impl_p->bind_module_id(mod_info.id);
+    }
+    {% endif %}
+    {% endfor %}
 
     {% set config_client_was_created = namespace(value=false) %}
 
@@ -168,6 +181,9 @@ std::vector<Everest::cmd> everest_register(const RequirementInitialization& requ
     {% for impl in provides %}
     {% if impl.rwconfig|length > 0 %}
     auto p_{{ impl.id }} = std::make_unique<{{ impl.id }}::{{ impl.class_name }}>(&adapter, mod_ptr, {{ impl.id }}_config, {{ impl.id }}_rwconfig);
+    {{ impl.id }}_impl_p = p_{{ impl.id }}.get();
+    {% elif impl.generated_impl %}
+    auto p_{{ impl.id }} = std::make_unique<{{ impl.id }}::{{ impl.class_name }}>(&adapter, "{{ impl.id }}", {{ impl.id }}_config);
     {{ impl.id }}_impl_p = p_{{ impl.id }}.get();
     {% else %}
     auto p_{{ impl.id }} = std::make_unique<{{ impl.id }}::{{ impl.class_name }}>(&adapter, mod_ptr, {{ impl.id }}_config);
