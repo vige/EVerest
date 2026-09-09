@@ -49,10 +49,12 @@ Envelope livedata_envelope() {
     envelope.module_type = "LemDCBM400600";
     envelope.set = "livedata";
     envelope.timestamp = "2026-08-12T10:41:07Z";
-    envelope.mapping = Mapping{1, std::nullopt};
+    envelope.mapping = EvseMapping{1, std::nullopt};
     envelope.values = Values{{"temperature_C", 41.2}, {"frequency_Hz", 49.98}};
     return envelope;
 }
+
+const std::string LIVEDATA_TOPIC = "everest-telemetry/v1/powermeter_1/livedata";
 
 } // namespace
 
@@ -125,10 +127,10 @@ TEST_CASE("an unknown entry type in the catalog is an error", "[telemetry][catal
     CHECK_THROWS(payload.get<TelemetryDefinitions>());
 }
 
-TEST_CASE("topics carry module id and set", "[telemetry][topic]") {
-    CHECK(topic_for("powermeter_1", "livedata") == "everest-telemetry/v1/powermeter_1/livedata");
+TEST_CASE("the topic carries module id and set", "[telemetry][topic]") {
+    CHECK(topic_for("powermeter_1", "livedata") == LIVEDATA_TOPIC);
 
-    const auto address = parse_topic("everest-telemetry/v1/powermeter_1/livedata");
+    const auto address = parse_topic(LIVEDATA_TOPIC);
     REQUIRE(address.has_value());
     CHECK(address->module_id == "powermeter_1");
     CHECK(address->set == "livedata");
@@ -142,6 +144,24 @@ TEST_CASE("topics carry module id and set", "[telemetry][topic]") {
     }
 }
 
+TEST_CASE("a filter becomes a topic to subscribe to", "[telemetry][filter]") {
+    CHECK(Filter{}.topic_pattern() == "everest-telemetry/v1/+/+");
+    CHECK(TOPIC_WILDCARD == Filter{}.topic_pattern());
+
+    Filter by_set;
+    by_set.set = "livedata";
+    CHECK(by_set.topic_pattern() == "everest-telemetry/v1/+/livedata");
+
+    Filter by_module;
+    by_module.module_id = "powermeter_1";
+    CHECK(by_module.topic_pattern() == "everest-telemetry/v1/powermeter_1/+");
+
+    Filter both;
+    both.module_id = "powermeter_1";
+    both.set = "diagnostics";
+    CHECK(both.topic_pattern() == "everest-telemetry/v1/powermeter_1/diagnostics");
+}
+
 TEST_CASE("an envelope survives a round trip over the wire", "[telemetry][envelope]") {
     auto envelope = livedata_envelope();
     envelope.instance = "converter_7";
@@ -149,22 +169,38 @@ TEST_CASE("an envelope survives a round trip over the wire", "[telemetry][envelo
     envelope.labels = {{"slot", "B3"}};
 
     const auto payload = to_payload(envelope);
-    const auto parsed = parse_envelope(topic_for(envelope.module_id, envelope.set), payload);
+    const auto restored = read_envelope(topic_for(envelope.module_id, envelope.set), payload);
 
-    REQUIRE(parsed.ok());
-    const auto& restored = *parsed.envelope;
-    CHECK(restored.version == ENVELOPE_VERSION);
-    CHECK(restored.module_id == "powermeter_1");
-    CHECK(restored.module_type == "LemDCBM400600");
-    CHECK(restored.set == "livedata");
-    CHECK(restored.instance == "converter_7");
-    CHECK(restored.timestamp == "2026-08-12T10:41:07Z");
-    REQUIRE(restored.mapping.has_value());
-    CHECK(restored.mapping->evse == 1);
-    CHECK_FALSE(restored.mapping->connector.has_value());
-    CHECK(restored.seq == 42u);
-    CHECK(restored.labels.at("slot") == "B3");
-    CHECK(std::get<double>(restored.values.at("temperature_C")) == 41.2);
+    REQUIRE(restored.has_value());
+    CHECK(restored->version == ENVELOPE_VERSION);
+    CHECK(restored->module_id == "powermeter_1");
+    CHECK(restored->set == "livedata");
+    CHECK(restored->module_type == "LemDCBM400600");
+    CHECK(restored->instance == "converter_7");
+    CHECK(restored->timestamp == "2026-08-12T10:41:07Z");
+    REQUIRE(restored->mapping.has_value());
+    CHECK(restored->mapping->evse == 1);
+    CHECK_FALSE(restored->mapping->connector.has_value());
+    CHECK(restored->seq == 42u);
+    CHECK(restored->labels.at("slot") == "B3");
+    CHECK(std::get<double>(restored->values.at("temperature_C")) == 41.2);
+
+    SECTION("module id and set are not repeated in the payload") {
+        CHECK(payload.count("module_id") == 0);
+        CHECK(payload.count("set") == 0);
+    }
+}
+
+TEST_CASE("the topic is authoritative for the identity", "[telemetry][envelope]") {
+    auto payload = to_payload(livedata_envelope());
+    payload["module_id"] = "somebody_else";
+    payload["set"] = "diagnostics";
+
+    const auto envelope = read_envelope(LIVEDATA_TOPIC, payload);
+
+    REQUIRE(envelope.has_value());
+    CHECK(envelope->module_id == "powermeter_1");
+    CHECK(envelope->set == "livedata");
 }
 
 TEST_CASE("values keep the type they arrived with", "[telemetry][envelope]") {
@@ -175,9 +211,9 @@ TEST_CASE("values keep the type they arrived with", "[telemetry][envelope]") {
                              {"temperature_C", 41.2},
                              {"raw", nlohmann::json{{"registers", {1, 2, 3}}}}};
 
-    const auto parsed = parse_envelope(topic_for(envelope.module_id, envelope.set), to_payload(envelope));
-    REQUIRE(parsed.ok());
-    const auto& values = parsed.envelope->values;
+    const auto restored = read_envelope(LIVEDATA_TOPIC, to_payload(envelope));
+    REQUIRE(restored.has_value());
+    const auto& values = restored->values;
 
     CHECK(type_of(values.at("fw_state")) == EntryType::String);
     CHECK(type_of(values.at("restarts")) == EntryType::Integer);
@@ -191,87 +227,65 @@ TEST_CASE("a partial publish carries only what changed", "[telemetry][envelope]"
     auto envelope = livedata_envelope();
     envelope.values = Values{{"temperature_C", 43.9}};
 
-    const auto parsed = parse_envelope(topic_for(envelope.module_id, envelope.set), to_payload(envelope));
+    const auto restored = read_envelope(LIVEDATA_TOPIC, to_payload(envelope));
 
-    REQUIRE(parsed.ok());
-    CHECK(parsed.envelope->values.size() == 1);
-    CHECK(parsed.envelope->values.count("frequency_Hz") == 0);
+    REQUIRE(restored.has_value());
+    CHECK(restored->values.size() == 1);
+    CHECK(restored->values.count("frequency_Hz") == 0);
 
     SECTION("an envelope with no values at all is still an envelope") {
         envelope.values.clear();
         envelope.seq = 7;
-        const auto empty = parse_envelope(topic_for(envelope.module_id, envelope.set), to_payload(envelope));
-        REQUIRE(empty.ok());
-        CHECK(empty.envelope->values.empty());
-        CHECK(empty.envelope->seq == 7u);
+        const auto empty = read_envelope(LIVEDATA_TOPIC, to_payload(envelope));
+        REQUIRE(empty.has_value());
+        CHECK(empty->values.empty());
+        CHECK(empty->seq == 7u);
     }
 }
 
-TEST_CASE("unknown envelope fields are ignored", "[telemetry][envelope]") {
+TEST_CASE("unknown payload fields are ignored", "[telemetry][envelope]") {
     auto payload = to_payload(livedata_envelope());
     payload["future_field"] = "from a newer producer";
 
-    const auto parsed = parse_envelope("everest-telemetry/v1/powermeter_1/livedata", payload);
-
-    CHECK(parsed.ok());
+    CHECK(read_envelope(LIVEDATA_TOPIC, payload).has_value());
 }
 
-TEST_CASE("a malformed payload is reported, never guessed", "[telemetry][envelope]") {
-    const std::string topic = "everest-telemetry/v1/powermeter_1/livedata";
-
+TEST_CASE("a payload that cannot be read yields nothing", "[telemetry][envelope]") {
     SECTION("not an object") {
-        CHECK(parse_envelope(topic, nlohmann::json::array({1, 2})).error == ParseError::NotAnObject);
+        CHECK_FALSE(read_envelope(LIVEDATA_TOPIC, nlohmann::json::array({1, 2})).has_value());
     }
 
-    SECTION("not json at all") {
-        CHECK(parse_envelope(topic, std::string_view{"{not json"}).error == ParseError::NotJson);
+    SECTION("no values object") {
+        auto payload = to_payload(livedata_envelope());
+        payload.erase("values");
+        CHECK_FALSE(read_envelope(LIVEDATA_TOPIC, payload).has_value());
+
+        payload["values"] = "not an object";
+        CHECK_FALSE(read_envelope(LIVEDATA_TOPIC, payload).has_value());
     }
 
     SECTION("an envelope version this consumer does not understand") {
         auto payload = to_payload(livedata_envelope());
         payload["version"] = 2;
-        CHECK(parse_envelope(topic, payload).error == ParseError::UnsupportedVersion);
+        CHECK_FALSE(read_envelope(LIVEDATA_TOPIC, payload).has_value());
     }
 
-    SECTION("a missing required field names the field") {
-        for (const auto* field : {"version", "module_id", "module_type", "set", "timestamp", "values"}) {
-            auto payload = to_payload(livedata_envelope());
-            payload.erase(field);
-            const auto parsed = parse_envelope(topic, payload);
-            CHECK(parsed.error == ParseError::MissingField);
-            CHECK(parsed.message == field);
-        }
+    SECTION("a topic outside the value flow") {
+        CHECK_FALSE(read_envelope("everest/powermeter_1/var", to_payload(livedata_envelope())).has_value());
     }
 
-    SECTION("a required field of the wrong type names the field") {
+    SECTION("optional fields of the wrong type are skipped, not fatal") {
         auto payload = to_payload(livedata_envelope());
-        payload["values"] = "not an object";
-        const auto parsed = parse_envelope(topic, payload);
-        CHECK(parsed.error == ParseError::WrongFieldType);
-        CHECK(parsed.message == "values");
-    }
+        payload["instance"] = 7;
+        payload["seq"] = "later";
+        payload["mapping"] = "evse 1";
 
-    SECTION("optional fields of the wrong type are refused too") {
-        for (const auto* field : {"instance", "mapping", "seq", "labels"}) {
-            auto payload = to_payload(livedata_envelope());
-            payload[field] = 0.5;
-            const auto parsed = parse_envelope(topic, payload);
-            CHECK(parsed.error == ParseError::WrongFieldType);
-            CHECK(parsed.message == field);
-        }
-    }
-
-    SECTION("a payload that disagrees with its topic is refused") {
-        const auto payload = to_payload(livedata_envelope());
-        CHECK(parse_envelope("everest-telemetry/v1/powermeter_2/livedata", payload).error ==
-              ParseError::TopicMismatch);
-        CHECK(parse_envelope("everest-telemetry/v1/powermeter_1/diagnostics", payload).error ==
-              ParseError::TopicMismatch);
-    }
-
-    SECTION("a topic outside the value flow is refused before the payload is looked at") {
-        CHECK(parse_envelope("everest/powermeter_1/var", nlohmann::json::object()).error ==
-              ParseError::NotATelemetryTopic);
+        const auto envelope = read_envelope(LIVEDATA_TOPIC, payload);
+        REQUIRE(envelope.has_value());
+        CHECK_FALSE(envelope->instance.has_value());
+        CHECK_FALSE(envelope->seq.has_value());
+        CHECK_FALSE(envelope->mapping.has_value());
+        CHECK(envelope->values.size() == 2);
     }
 }
 
@@ -287,141 +301,4 @@ TEST_CASE("an address distinguishes devices behind one module", "[telemetry][add
     CHECK_FALSE(first.address() == second.address());
     CHECK_FALSE(first.address() == unaddressed.address());
     CHECK((first.address() < second.address() or second.address() < first.address()));
-}
-
-TEST_CASE("an unset filter member matches anything", "[telemetry][filter]") {
-    auto envelope = livedata_envelope();
-    envelope.instance = "converter_7";
-
-    CHECK(Filter{}.matches(envelope));
-
-    SECTION("module id") {
-        Filter filter;
-        filter.module_id = "powermeter_1";
-        CHECK(filter.matches(envelope));
-        filter.module_id = "powermeter_2";
-        CHECK_FALSE(filter.matches(envelope));
-    }
-
-    SECTION("module type, so a consumer can filter without knowing instance names") {
-        Filter filter;
-        filter.module_type = "LemDCBM400600";
-        CHECK(filter.matches(envelope));
-        filter.module_type = "Huawei_V100R023C10";
-        CHECK_FALSE(filter.matches(envelope));
-    }
-
-    SECTION("set") {
-        Filter filter;
-        filter.set = "livedata";
-        CHECK(filter.matches(envelope));
-        filter.set = "diagnostics";
-        CHECK_FALSE(filter.matches(envelope));
-    }
-
-    SECTION("instance") {
-        Filter filter;
-        filter.instance = "converter_7";
-        CHECK(filter.matches(envelope));
-        filter.instance = "converter_8";
-        CHECK_FALSE(filter.matches(envelope));
-
-        SECTION("an instance filter does not match an envelope without an instance") {
-            const auto unaddressed = livedata_envelope();
-            filter.instance = "converter_7";
-            CHECK_FALSE(filter.matches(unaddressed));
-        }
-    }
-
-    SECTION("evse and connector require a mapping") {
-        Filter filter;
-        filter.evse = 1;
-        CHECK(filter.matches(envelope));
-        filter.evse = 2;
-        CHECK_FALSE(filter.matches(envelope));
-
-        filter = Filter{};
-        filter.connector = 1;
-        CHECK_FALSE(filter.matches(envelope)); // mapping has no connector
-
-        envelope.mapping = Mapping{1, 1};
-        CHECK(filter.matches(envelope));
-
-        envelope.mapping.reset();
-        filter = Filter{};
-        filter.evse = 1;
-        CHECK_FALSE(filter.matches(envelope));
-    }
-
-    SECTION("members combine as a conjunction") {
-        Filter filter;
-        filter.module_type = "LemDCBM400600";
-        filter.set = "diagnostics";
-        CHECK_FALSE(filter.matches(envelope));
-    }
-}
-
-TEST_CASE("values are validated against their declaration", "[telemetry][validation]") {
-    const auto definitions = powermeter_definitions();
-    auto envelope = livedata_envelope();
-
-    SECTION("declared values pass") {
-        envelope.values = Values{{"temperature_C", 41.2}, {"fw_state", std::string{"Measuring"}}};
-        CHECK(validate(envelope, definitions).ok());
-    }
-
-    SECTION("an integral value satisfies a number declaration") {
-        envelope.values = Values{{"temperature_C", std::int64_t{41}}};
-        CHECK(validate(envelope, definitions).ok());
-    }
-
-    SECTION("an undeclared entry is a finding on that entry") {
-        envelope.values = Values{{"temperature_C", 41.2}, {"undeclared", 1.0}};
-        const auto result = validate(envelope, definitions);
-        REQUIRE(result.findings.size() == 1);
-        CHECK(result.findings.front().entry == "undeclared");
-        CHECK(result.findings.front().issue == ValueIssue::UndeclaredEntry);
-    }
-
-    SECTION("a wrong type is a finding") {
-        envelope.values = Values{{"temperature_C", std::string{"warm"}}};
-        const auto result = validate(envelope, definitions);
-        REQUIRE(result.findings.size() == 1);
-        CHECK(result.findings.front().issue == ValueIssue::TypeMismatch);
-    }
-
-    SECTION("declared limits are enforced") {
-        envelope.values = Values{{"temperature_C", 150.0}};
-        CHECK(validate(envelope, definitions).findings.front().issue == ValueIssue::OutOfRange);
-
-        envelope.values = Values{{"temperature_C", -50.0}};
-        CHECK(validate(envelope, definitions).findings.front().issue == ValueIssue::OutOfRange);
-
-        envelope.values = Values{{"frequency_Hz", 5000.0}};
-        CHECK(validate(envelope, definitions).ok()); // no limits declared
-    }
-
-    SECTION("a values list is enforced") {
-        envelope.values = Values{{"fw_state", std::string{"Rebooting"}}};
-        CHECK(validate(envelope, definitions).findings.front().issue == ValueIssue::NotInValuesList);
-    }
-
-    SECTION("an undeclared set or module invalidates the whole envelope") {
-        envelope.set = "diagnostics";
-        auto result = validate(envelope, definitions);
-        REQUIRE(result.findings.size() == 1);
-        CHECK(result.findings.front().entry.empty());
-        CHECK(result.findings.front().issue == ValueIssue::UndeclaredSet);
-
-        envelope = livedata_envelope();
-        envelope.module_id = "powermeter_2";
-        result = validate(envelope, definitions);
-        REQUIRE(result.findings.size() == 1);
-        CHECK(result.findings.front().issue == ValueIssue::UndeclaredModule);
-    }
-
-    SECTION("every offending value is reported, not just the first") {
-        envelope.values = Values{{"temperature_C", std::string{"warm"}}, {"undeclared", 1.0}};
-        CHECK(validate(envelope, definitions).findings.size() == 2);
-    }
 }

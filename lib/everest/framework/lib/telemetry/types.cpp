@@ -3,52 +3,10 @@
 
 #include <utils/telemetry/types.hpp>
 
-#include <algorithm>
 #include <tuple>
 #include <utility>
 
 namespace Everest::telemetry {
-
-namespace {
-
-/// \brief Reads a required string field, reporting which field was at fault.
-bool read_string(const nlohmann::json& payload, const char* field, std::string& out, ParseResult& result) {
-    const auto it = payload.find(field);
-    if (it == payload.end()) {
-        result.error = ParseError::MissingField;
-        result.message = field;
-        return false;
-    }
-    if (not it->is_string()) {
-        result.error = ParseError::WrongFieldType;
-        result.message = field;
-        return false;
-    }
-    out = it->get<std::string>();
-    return true;
-}
-
-/// \returns the numeric value of \p value for range checks, or nothing for non-numeric values
-std::optional<double> as_number(const Value& value) {
-    if (std::holds_alternative<std::int64_t>(value)) {
-        return static_cast<double>(std::get<std::int64_t>(value));
-    }
-    if (std::holds_alternative<double>(value)) {
-        return std::get<double>(value);
-    }
-    return std::nullopt;
-}
-
-bool type_matches(EntryType declared, const Value& value) {
-    const auto actual = type_of(value);
-    if (declared == actual) {
-        return true;
-    }
-    // json does not distinguish 42 from 42.0, so a Number declaration accepts integral values.
-    return declared == EntryType::Number and actual == EntryType::Integer;
-}
-
-} // namespace
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -92,46 +50,6 @@ std::optional<EntryType> entry_type_from_string(std::string_view name) {
         return EntryType::Array;
     }
     return std::nullopt;
-}
-
-std::string_view to_string(ParseError error) {
-    switch (error) {
-    case ParseError::None:
-        return "none";
-    case ParseError::NotAnObject:
-        return "not an object";
-    case ParseError::NotJson:
-        return "not json";
-    case ParseError::UnsupportedVersion:
-        return "unsupported version";
-    case ParseError::MissingField:
-        return "missing field";
-    case ParseError::WrongFieldType:
-        return "wrong field type";
-    case ParseError::TopicMismatch:
-        return "topic mismatch";
-    case ParseError::NotATelemetryTopic:
-        return "not a telemetry topic";
-    }
-    return "unknown";
-}
-
-std::string_view to_string(ValueIssue issue) {
-    switch (issue) {
-    case ValueIssue::UndeclaredModule:
-        return "undeclared module";
-    case ValueIssue::UndeclaredSet:
-        return "undeclared set";
-    case ValueIssue::UndeclaredEntry:
-        return "undeclared entry";
-    case ValueIssue::TypeMismatch:
-        return "type mismatch";
-    case ValueIssue::OutOfRange:
-        return "out of range";
-    case ValueIssue::NotInValuesList:
-        return "not in values list";
-    }
-    return "unknown";
 }
 
 // ---------------------------------------------------------------------------
@@ -229,30 +147,8 @@ EntryType type_of(const Value& value) {
 // Filtering
 // ---------------------------------------------------------------------------
 
-bool Filter::matches(const Envelope& envelope) const {
-    if (module_id.has_value() and *module_id != envelope.module_id) {
-        return false;
-    }
-    if (module_type.has_value() and *module_type != envelope.module_type) {
-        return false;
-    }
-    if (set.has_value() and *set != envelope.set) {
-        return false;
-    }
-    if (instance.has_value() and instance != envelope.instance) {
-        return false;
-    }
-    if (evse.has_value()) {
-        if (not envelope.mapping.has_value() or envelope.mapping->evse != *evse) {
-            return false;
-        }
-    }
-    if (connector.has_value()) {
-        if (not envelope.mapping.has_value() or envelope.mapping->connector != connector) {
-            return false;
-        }
-    }
-    return true;
+std::string Filter::topic_pattern() const {
+    return topic_for(module_id.value_or("+"), set.value_or("+"));
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +248,7 @@ void from_json(const nlohmann::json& j, ModuleDefinition& definition) {
     }
 }
 
-void to_json(nlohmann::json& j, const Mapping& mapping) {
+void to_json(nlohmann::json& j, const EvseMapping& mapping) {
     j = nlohmann::json::object();
     j["evse"] = mapping.evse;
     if (mapping.connector.has_value()) {
@@ -360,19 +256,73 @@ void to_json(nlohmann::json& j, const Mapping& mapping) {
     }
 }
 
-void from_json(const nlohmann::json& j, Mapping& mapping) {
+void from_json(const nlohmann::json& j, EvseMapping& mapping) {
     mapping.evse = j.at("evse").get<int>();
     if (const auto it = j.find("connector"); it != j.end()) {
         mapping.connector = it->get<int>();
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reading a payload
+// ---------------------------------------------------------------------------
+
+std::optional<Envelope> read_envelope(std::string_view topic, const nlohmann::json& payload) {
+    const auto address = parse_topic(topic);
+    if (not address.has_value() or not payload.is_object()) {
+        return std::nullopt;
+    }
+
+    Envelope envelope;
+    envelope.module_id = address->module_id;
+    envelope.set = address->set;
+
+    if (const auto it = payload.find("version"); it != payload.end()) {
+        if (not it->is_number_integer() or it->get<int>() != ENVELOPE_VERSION) {
+            return std::nullopt;
+        }
+        envelope.version = it->get<int>();
+    }
+
+    const auto values = payload.find("values");
+    if (values == payload.end() or not values->is_object()) {
+        return std::nullopt;
+    }
+    for (const auto& [name, value] : values->items()) {
+        envelope.values[name] = value.get<Value>();
+    }
+
+    if (const auto it = payload.find("module_type"); it != payload.end() and it->is_string()) {
+        envelope.module_type = it->get<std::string>();
+    }
+    if (const auto it = payload.find("instance"); it != payload.end() and it->is_string()) {
+        envelope.instance = it->get<std::string>();
+    }
+    if (const auto it = payload.find("timestamp"); it != payload.end() and it->is_string()) {
+        envelope.timestamp = it->get<std::string>();
+    }
+    if (const auto it = payload.find("mapping");
+        it != payload.end() and it->is_object() and it->contains("evse")) {
+        envelope.mapping = it->get<EvseMapping>();
+    }
+    if (const auto it = payload.find("seq"); it != payload.end() and it->is_number_unsigned()) {
+        envelope.seq = it->get<std::uint64_t>();
+    }
+    if (const auto it = payload.find("labels"); it != payload.end() and it->is_object()) {
+        for (const auto& [key, label] : it->items()) {
+            if (label.is_string()) {
+                envelope.labels[key] = label.get<std::string>();
+            }
+        }
+    }
+
+    return envelope;
+}
+
 nlohmann::json to_payload(const Envelope& envelope) {
     auto payload = nlohmann::json::object();
     payload["version"] = envelope.version;
-    payload["module_id"] = envelope.module_id;
     payload["module_type"] = envelope.module_type;
-    payload["set"] = envelope.set;
     if (envelope.instance.has_value()) {
         payload["instance"] = *envelope.instance;
     }
@@ -396,178 +346,6 @@ nlohmann::json to_payload(const Envelope& envelope) {
     }
     payload["values"] = std::move(values);
     return payload;
-}
-
-// ---------------------------------------------------------------------------
-// Parsing
-// ---------------------------------------------------------------------------
-
-ParseResult parse_envelope(std::string_view topic, const nlohmann::json& payload) {
-    ParseResult result;
-
-    const auto topic_address = parse_topic(topic);
-    if (not topic_address.has_value()) {
-        result.error = ParseError::NotATelemetryTopic;
-        result.message = std::string{topic};
-        return result;
-    }
-
-    if (not payload.is_object()) {
-        result.error = ParseError::NotAnObject;
-        return result;
-    }
-
-    Envelope envelope;
-
-    const auto version = payload.find("version");
-    if (version == payload.end()) {
-        result.error = ParseError::MissingField;
-        result.message = "version";
-        return result;
-    }
-    if (not version->is_number_integer()) {
-        result.error = ParseError::WrongFieldType;
-        result.message = "version";
-        return result;
-    }
-    envelope.version = version->get<int>();
-    if (envelope.version != ENVELOPE_VERSION) {
-        result.error = ParseError::UnsupportedVersion;
-        result.message = std::to_string(envelope.version);
-        return result;
-    }
-
-    if (not read_string(payload, "module_id", envelope.module_id, result) or
-        not read_string(payload, "module_type", envelope.module_type, result) or
-        not read_string(payload, "set", envelope.set, result) or
-        not read_string(payload, "timestamp", envelope.timestamp, result)) {
-        return result;
-    }
-
-    if (envelope.module_id != topic_address->module_id or envelope.set != topic_address->set) {
-        result.error = ParseError::TopicMismatch;
-        result.message = topic_for(envelope.module_id, envelope.set);
-        return result;
-    }
-
-    if (const auto it = payload.find("instance"); it != payload.end()) {
-        if (not it->is_string()) {
-            result.error = ParseError::WrongFieldType;
-            result.message = "instance";
-            return result;
-        }
-        envelope.instance = it->get<std::string>();
-    }
-
-    if (const auto it = payload.find("mapping"); it != payload.end()) {
-        if (not it->is_object() or not it->contains("evse") or not it->at("evse").is_number_integer()) {
-            result.error = ParseError::WrongFieldType;
-            result.message = "mapping";
-            return result;
-        }
-        envelope.mapping = it->get<Mapping>();
-    }
-
-    if (const auto it = payload.find("seq"); it != payload.end()) {
-        if (not it->is_number_unsigned()) {
-            result.error = ParseError::WrongFieldType;
-            result.message = "seq";
-            return result;
-        }
-        envelope.seq = it->get<std::uint64_t>();
-    }
-
-    if (const auto it = payload.find("labels"); it != payload.end()) {
-        if (not it->is_object()) {
-            result.error = ParseError::WrongFieldType;
-            result.message = "labels";
-            return result;
-        }
-        for (const auto& [key, label] : it->items()) {
-            if (not label.is_string()) {
-                result.error = ParseError::WrongFieldType;
-                result.message = "labels." + key;
-                return result;
-            }
-            envelope.labels[key] = label.get<std::string>();
-        }
-    }
-
-    const auto values = payload.find("values");
-    if (values == payload.end()) {
-        result.error = ParseError::MissingField;
-        result.message = "values";
-        return result;
-    }
-    if (not values->is_object()) {
-        result.error = ParseError::WrongFieldType;
-        result.message = "values";
-        return result;
-    }
-    for (const auto& [name, value] : values->items()) {
-        envelope.values[name] = value.get<Value>();
-    }
-
-    result.envelope = std::move(envelope);
-    return result;
-}
-
-ParseResult parse_envelope(std::string_view topic, std::string_view payload) {
-    const auto parsed = nlohmann::json::parse(payload, nullptr, false);
-    if (parsed.is_discarded()) {
-        ParseResult result;
-        result.error = ParseError::NotJson;
-        return result;
-    }
-    return parse_envelope(topic, parsed);
-}
-
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
-
-ValidationResult validate(const Envelope& envelope, const TelemetryDefinitions& definitions) {
-    ValidationResult result;
-
-    const auto module_it = definitions.find(envelope.module_id);
-    if (module_it == definitions.end()) {
-        result.findings.push_back({"", ValueIssue::UndeclaredModule});
-        return result;
-    }
-    const auto set_it = module_it->second.sets.find(envelope.set);
-    if (set_it == module_it->second.sets.end()) {
-        result.findings.push_back({"", ValueIssue::UndeclaredSet});
-        return result;
-    }
-
-    for (const auto& [name, value] : envelope.values) {
-        const auto entry_it = set_it->second.entries.find(name);
-        if (entry_it == set_it->second.entries.end()) {
-            result.findings.push_back({name, ValueIssue::UndeclaredEntry});
-            continue;
-        }
-        const auto& declaration = entry_it->second;
-        if (not type_matches(declaration.type, value)) {
-            result.findings.push_back({name, ValueIssue::TypeMismatch});
-            continue;
-        }
-        if (const auto number = as_number(value); number.has_value()) {
-            if ((declaration.minimum.has_value() and *number < *declaration.minimum) or
-                (declaration.maximum.has_value() and *number > *declaration.maximum)) {
-                result.findings.push_back({name, ValueIssue::OutOfRange});
-                continue;
-            }
-        }
-        if (declaration.values_list.has_value() and std::holds_alternative<std::string>(value)) {
-            const auto& allowed = *declaration.values_list;
-            const auto& text = std::get<std::string>(value);
-            if (std::find(allowed.begin(), allowed.end(), text) == allowed.end()) {
-                result.findings.push_back({name, ValueIssue::NotInValuesList});
-            }
-        }
-    }
-
-    return result;
 }
 
 } // namespace Everest::telemetry

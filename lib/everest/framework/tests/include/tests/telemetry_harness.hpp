@@ -4,8 +4,8 @@
 
 #include <cstdint>
 #include <cstdio>
-#include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,68 +14,64 @@
 
 #include <nlohmann/json.hpp>
 
-#include <utils/telemetry/consumer_core.hpp>
+#include <tests/mock_mqtt_abstraction.hpp>
+#include <utils/telemetry/consumer.hpp>
 #include <utils/telemetry/types.hpp>
 
 /// \file
-/// \brief Test harness for the telemetry consumer: a fake bus with MQTT topic semantics, a producer
-/// stub, a capturing sink and a catalog builder.
+/// \brief Test harness for the telemetry consumer: an MQTT mock that can deliver, a producer stub,
+/// a capturing sink and a catalog builder.
 ///
-/// No broker and no threads. The fake bus routes on the same wildcard rules the real broker applies,
-/// so a test written against it keeps its meaning once the MQTT binding replaces the bus.
+/// No broker and no threads. Delivery applies MQTT wildcard semantics, the same rule the framework
+/// message handler applies to raw-topic handlers, so a subscription that a test exercises here
+/// behaves as it does against a real broker.
 namespace Everest::telemetry::tests {
 
-/// \brief In-memory stand-in for the broker, with MQTT single-level wildcard routing.
-class FakeBus {
+/// \brief MockMQTTAbstraction plus what a test needs from a broker: several handlers per topic
+/// pattern, and delivery to the ones a published topic matches.
+class BrokerMock : public Everest::tests::MockMQTTAbstraction {
 public:
-    using Handler = std::function<void(const std::string& topic, const nlohmann::json& payload)>;
-
-    /// \brief Registers \p handler for a topic pattern, which may contain '+' and a trailing '#'.
-    void register_handler(std::string pattern, Handler handler) {
-        m_handlers.emplace_back(std::move(pattern), std::move(handler));
+    void register_handler(const std::string& topic, std::shared_ptr<TypedHandler> handler, QOS qos) override {
+        Everest::tests::MockMQTTAbstraction::register_handler(topic, handler, qos);
+        m_subscriptions.emplace_back(topic, std::move(handler));
     }
 
-    /// \brief Delivers \p payload to every handler whose pattern matches \p topic.
+    void unregister_handler(const std::string& topic, const Token& token) override {
+        Everest::tests::MockMQTTAbstraction::unregister_handler(topic, token);
+        for (auto it = m_subscriptions.begin(); it != m_subscriptions.end(); ++it) {
+            if (it->first == topic and it->second == token) {
+                m_subscriptions.erase(it);
+                return;
+            }
+        }
+    }
+
+    /// \brief Delivers \p payload to every subscription whose pattern matches \p topic.
     /// \returns how many handlers received it
-    std::size_t publish(const std::string& topic, const nlohmann::json& payload) {
-        ++m_published;
+    std::size_t deliver(const std::string& topic, const nlohmann::json& payload) {
+        auto subscriptions = m_subscriptions; // a handler may unsubscribe while being called
         std::size_t delivered = 0;
-        for (const auto& [pattern, handler] : m_handlers) {
+        for (const auto& [pattern, handler] : subscriptions) {
             if (topic_matches(pattern, topic)) {
                 ++delivered;
-                handler(topic, payload);
+                (*handler->handler)(topic, payload);
             }
         }
-        m_delivered += delivered;
         return delivered;
     }
 
-    /// \brief Delivers a raw payload, for cases the producer stub cannot express (invalid json).
-    std::size_t publish_raw(const std::string& topic, std::string_view payload) {
-        ++m_published;
-        const auto parsed = nlohmann::json::parse(payload, nullptr, false);
-        std::size_t delivered = 0;
-        for (const auto& [pattern, handler] : m_handlers) {
-            if (topic_matches(pattern, topic)) {
-                ++delivered;
-                // A real broker hands over bytes; a discarded parse stands for "not json".
-                handler(topic, parsed);
-            }
+    /// \returns the topic patterns currently subscribed, in subscription order
+    std::vector<std::string> subscribed_topics() const {
+        std::vector<std::string> topics;
+        topics.reserve(m_subscriptions.size());
+        for (const auto& [pattern, handler] : m_subscriptions) {
+            topics.push_back(pattern);
         }
-        m_delivered += delivered;
-        return delivered;
+        return topics;
     }
 
-    std::size_t published() const {
-        return m_published;
-    }
-
-    std::size_t delivered() const {
-        return m_delivered;
-    }
-
-    std::size_t handler_count() const {
-        return m_handlers.size();
+    std::size_t subscription_count() const {
+        return m_subscriptions.size();
     }
 
     /// \brief MQTT topic matching: '+' matches exactly one level, '#' matches the rest.
@@ -115,9 +111,7 @@ private:
         }
     }
 
-    std::vector<std::pair<std::string, Handler>> m_handlers;
-    std::size_t m_published{0};
-    std::size_t m_delivered{0};
+    std::vector<std::pair<std::string, std::shared_ptr<TypedHandler>>> m_subscriptions;
 };
 
 /// \brief Composes envelopes the way the producer side will, and the only place in the tests that
@@ -127,17 +121,18 @@ public:
     /// \brief Everything the framework stamps that a test may want to steer.
     struct Attributes {
         std::optional<std::string> instance;
-        std::optional<Mapping> mapping;
+        std::optional<EvseMapping> mapping;
         std::optional<std::uint64_t> seq;
         std::map<std::string, std::string, std::less<>> labels;
         std::optional<std::string> timestamp;
     };
 
-    PublisherStub(FakeBus& bus, std::string module_id, std::string module_type) :
-        m_bus(bus), m_module_id(std::move(module_id)), m_module_type(std::move(module_type)) {
+    PublisherStub(BrokerMock& broker, std::string module_id, std::string module_type) :
+        m_broker(broker), m_module_id(std::move(module_id)), m_module_type(std::move(module_type)) {
     }
 
     /// \brief Publishes a partial update of \p set.
+    /// \returns how many subscriptions received it
     std::size_t publish(const std::string& set, const Values& values, Attributes attributes = {}) {
         Envelope envelope;
         envelope.module_id = m_module_id;
@@ -150,12 +145,12 @@ public:
         envelope.timestamp = attributes.timestamp.value_or(next_timestamp());
         envelope.values = values;
         m_last = envelope;
-        return m_bus.publish(topic_for(m_module_id, set), to_payload(envelope));
+        return m_broker.deliver(topic_for(m_module_id, set), to_payload(envelope));
     }
 
     /// \brief Publishes a hand-written payload on this producer's topic, for malformed cases.
     std::size_t publish_payload(const std::string& set, const nlohmann::json& payload) {
-        return m_bus.publish(topic_for(m_module_id, set), payload);
+        return m_broker.deliver(topic_for(m_module_id, set), payload);
     }
 
     /// \returns the last envelope this stub composed
@@ -175,7 +170,7 @@ private:
         return std::string{buffer};
     }
 
-    FakeBus& m_bus;
+    BrokerMock& m_broker;
     std::string m_module_id;
     std::string m_module_type;
     std::optional<Envelope> m_last;
@@ -186,7 +181,7 @@ private:
 struct CapturingSink {
     std::vector<Envelope> envelopes;
 
-    ConsumerCore::Callback callback() {
+    Consumer::Callback callback() {
         return [this](const Envelope& envelope) { envelopes.push_back(envelope); };
     }
 
@@ -244,14 +239,6 @@ private:
     std::string m_module_id;
     std::string m_set;
 };
-
-/// \brief Wires \p core to \p bus exactly as the MQTT binding will: one wildcard subscription.
-inline void connect(ConsumerCore& core, FakeBus& bus) {
-    bus.register_handler(std::string{ConsumerCore::wildcard_topic()},
-                         [&core](const std::string& topic, const nlohmann::json& payload) {
-                             core.handle_message(topic, payload);
-                         });
-}
 
 /// \brief The powermeter livedata catalog from the proposal, used by several tests.
 inline TelemetryDefinitions powermeter_definitions() {
