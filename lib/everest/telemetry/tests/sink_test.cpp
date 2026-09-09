@@ -69,6 +69,31 @@ TEST(Sink, an_empty_filter_declares_interest_in_every_declared_entry) {
     EXPECT_EQ(station.publishers.at(0).interest_callers.at(0), "forwarder");
 }
 
+TEST(Sink, declaring_interest_resolves_the_definitions_by_itself) {
+    // A sink that only wants to receive should not have to ask for the definitions first.
+    Station station{two_publishers()};
+    Sink sink{station.slots, "forwarder"};
+
+    EXPECT_EQ(sink.declare_interest(Filter{}), 3u);
+    EXPECT_EQ(sink.definitions().size(), 3u);
+    EXPECT_EQ(station.publishers.at(0).interest_calls.size(), 1u);
+}
+
+TEST(Sink, the_definitions_are_resolved_once_however_interest_is_declared) {
+    Station station{two_publishers()};
+    Sink sink{station.slots, "forwarder"};
+
+    sink.resolve_definitions();
+    sink.declare_interest(Filter{});
+    Filter narrowed;
+    narrowed.set = "diagnostics";
+    sink.declare_interest(narrowed);
+
+    // get_definition is a blocking round trip per slot; asking again on every filter change would
+    // make a redeclaration cost as much as a startup.
+    EXPECT_EQ(station.publishers.at(0).definition_calls, 1u);
+}
+
 TEST(Sink, a_filter_on_the_set_leaves_the_other_sets_untouched) {
     Station station{two_publishers()};
     Sink sink{station.slots, "forwarder"};

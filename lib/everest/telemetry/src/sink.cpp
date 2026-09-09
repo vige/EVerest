@@ -66,6 +66,7 @@ void Sink::subscribe(UpdateHandler handler) {
 }
 
 std::size_t Sink::resolve_definitions() {
+    m_resolved = true;
     std::size_t resolved = 0;
     for (std::size_t index = 0; index < m_slots.size(); ++index) {
         try {
@@ -83,6 +84,12 @@ std::size_t Sink::resolve_definitions() {
 }
 
 std::size_t Sink::declare_interest(const Filter& filter) {
+    // A filter is evaluated against the definitions, so they have to be there. A sink that only
+    // wants to receive never needs to ask for them itself.
+    if (not m_resolved) {
+        resolve_definitions();
+    }
+
     std::size_t interested = 0;
     for (std::size_t index = 0; index < m_slots.size(); ++index) {
         const auto& definition = m_definitions.at(index);

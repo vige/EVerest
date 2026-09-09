@@ -85,14 +85,19 @@ public:
 
     /// \brief Calls `get_definition` on every slot and caches the result. Call from `ready`.
     ///
+    /// Optional: declare_interest() does this itself the first time, because a filter cannot be
+    /// evaluated without the definitions. Call it directly only to read the definitions before
+    /// declaring an interest - to build a device model, for instance.
+    ///
     /// A slot that does not answer is left without a definition and is skipped by every filter.
     /// \returns the number of slots that answered
     std::size_t resolve_definitions();
 
     /// \brief Declares interest in the entries \p filter selects, per matching slot.
     ///
-    /// Replaces any interest declared before: slots that no longer match are withdrawn. Requires
-    /// resolve_definitions() to have run, because a filter is evaluated against the definitions.
+    /// Replaces any interest declared before: slots that no longer match are withdrawn. Resolves
+    /// the definitions first if that has not happened yet, because a filter is evaluated against
+    /// them.
     /// \returns the number of slots left with a non-empty interest
     std::size_t declare_interest(const Filter& filter);
 
@@ -125,6 +130,7 @@ private:
     const std::string m_consumer_id;
     UpdateHandler m_handler;
 
+    bool m_resolved{false};
     std::vector<std::optional<types::telemetry::SetDefinition>> m_definitions;
     std::map<SetKey, types::telemetry::SetDefinition> m_definitions_by_key;
     std::vector<std::set<std::string>> m_interest;

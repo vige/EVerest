@@ -26,6 +26,7 @@ struct PublisherStub {
     bool answers_definition{true};
 
     // recorded by the adapter
+    std::size_t definition_calls{0};
     std::vector<std::vector<std::string>> interest_calls;
     std::vector<std::string> interest_callers;
     ValueCallback on_update;
@@ -51,6 +52,7 @@ struct SlotAdapter : public module::stub::QuietModuleAdapterStub {
     Result call_fn(const Requirement& req, const std::string& cmd, Parameters args) override {
         auto& publisher = publishers->at(req.index);
         if (cmd == "get_definition") {
+            ++publisher.definition_calls;
             if (not publisher.answers_definition) {
                 throw std::runtime_error("no definition");
             }
