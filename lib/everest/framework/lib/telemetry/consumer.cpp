@@ -58,6 +58,17 @@ Consumer::Subscription Consumer::subscribe(const Filter& filter, Callback callba
 
     auto handler = std::make_shared<Handler>([callback = std::move(callback)](const std::string& topic,
                                                                              json data) {
+        // The framework only decodes payloads on topics under its own prefix; everything else
+        // reaches a raw-topic handler as the undecoded payload wrapped in a json string. The
+        // telemetry flow lives outside that prefix, so the payload is decoded here.
+        if (data.is_string()) {
+            try {
+                data = json::parse(data.get_ref<const std::string&>());
+            } catch (const json::parse_error&) {
+                return;
+            }
+        }
+
         if (auto envelope = read_envelope(topic, data); envelope.has_value()) {
             callback(*envelope);
         }
