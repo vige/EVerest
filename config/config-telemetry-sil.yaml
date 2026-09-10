@@ -137,8 +137,9 @@ active_modules:
         - module_id: slac
           implementation_id: ev
   ocpp:
-    module: OCPP201
+    module: OCPPmulti
     config_module:
+      Mode: Only2
       DeviceModelDatabasePath: /tmp/telemetry-ocpp201/device_model_storage.db
       EverestDeviceModelDatabasePath: /tmp/telemetry-ocpp201/everest_device_model_storage.db
       CoreDatabasePath: /tmp/telemetry-ocpp201

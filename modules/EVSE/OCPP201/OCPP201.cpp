@@ -492,7 +492,7 @@ void OCPP201::init() {
     }
 }
 
-std::shared_ptr<telemetry_dm::TelemetryDeviceModelStorage> OCPP201::make_telemetry_device_model_storage() {
+std::shared_ptr<device_model::TelemetryDeviceModelStorage> OCPP201::make_telemetry_device_model_storage() {
     if (this->config.TelemetryMappingPath.empty()) {
         return nullptr;
     }
@@ -502,7 +502,7 @@ std::shared_ptr<telemetry_dm::TelemetryDeviceModelStorage> OCPP201::make_telemet
         return nullptr;
     }
 
-    const auto load = telemetry_dm::load_telemetry_mappings(fs::path(this->config.TelemetryMappingPath));
+    const auto load = device_model::load_telemetry_mappings(fs::path(this->config.TelemetryMappingPath));
     for (const auto& error : load.errors) {
         EVLOG_error << "telemetry: " << error;
     }
@@ -516,7 +516,7 @@ std::shared_ptr<telemetry_dm::TelemetryDeviceModelStorage> OCPP201::make_telemet
     // The definitions come from the producers themselves, so the type, unit and bounds of a device
     // model variable are the ones the publishing module declared in its manifest.
     this->telemetry_sink->resolve_definitions();
-    auto storage = std::make_shared<telemetry_dm::TelemetryDeviceModelStorage>(load.mappings,
+    auto storage = std::make_shared<device_model::TelemetryDeviceModelStorage>(load.mappings,
                                                                               this->telemetry_sink->definitions());
     for (const auto& unavailable : storage->unavailable()) {
         EVLOG_info << "telemetry: " << unavailable;
@@ -1092,7 +1092,7 @@ void OCPP201::ready() {
     // Registration snapshots get_device_model(), so this has to happen before the ChargePoint is
     // constructed; libocpp reads the structure once and never asks again.
     if (const auto telemetry_storage = this->make_telemetry_device_model_storage(); telemetry_storage != nullptr) {
-        composed_device_model_storage->register_device_model_storage(telemetry_dm::VARIABLE_SOURCE_TELEMETRY,
+        composed_device_model_storage->register_device_model_storage(device_model::VARIABLE_SOURCE_TELEMETRY,
                                                                      telemetry_storage);
     }
 

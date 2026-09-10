@@ -17,6 +17,8 @@ target_sources(ocpp_module_common
         src/device_model/composed_device_model_storage.cpp
         src/device_model/definitions.cpp
         src/device_model/everest_device_model_storage.cpp
+        src/device_model/telemetry_device_model_storage.cpp
+        src/device_model/telemetry_mapping.cpp
 )
 
 target_include_directories(ocpp_module_common
@@ -37,8 +39,10 @@ target_link_libraries(ocpp_module_common
     PUBLIC
         everest::ocpp
         everest::framework
+        everest::telemetry
     PRIVATE
         everest::ocpp_conversions
+        everest::yaml
 )
 
 if (DISABLE_EDM)

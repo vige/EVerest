@@ -452,6 +452,8 @@ void GenericOcpp::ready(const ConfigServiceClient& client) {
     EVLOG_info << "v2 device model database path:      " << device_model_database_path;
     EVLOG_info << "EVerest device model database path: " << everest_device_model_database_path;
 
+    init_telemetry();
+
     {
         std::lock_guard lock(m_member_mux);
         // initialise everest device model
@@ -476,6 +478,7 @@ void GenericOcpp::ready(const ConfigServiceClient& client) {
         std::move(evse_connector_structure),
         std::move(connector_mapping),
         m_everest_device_model_storage,
+        m_telemetry_device_model_storage,
         mv_config.getDeviceModelConfigMappings(),
         static_cast<std::int32_t>(mv_config.getOcpp16NetworkConfigSlot()),
         mv_config.getEnableLegacyConfigMigration(),
@@ -1854,6 +1857,65 @@ void GenericOcpp::charging_schedules_timer_stop() {
     m_charging_schedules_timer.stop();
 }
 
+void GenericOcpp::init_telemetry() {
+    if (mv_requires.telemetry.empty()) {
+        return;
+    }
+
+    // Subscribe first, always: a producer answers an interest change with a snapshot of the entries
+    // just asked for, and that snapshot is the only chance to see an entry that never changes again.
+    m_telemetry_sink = std::make_unique<Everest::telemetry::Sink>(mv_requires.telemetry, mv_info.id);
+    m_telemetry_sink->subscribe([this](const types::telemetry::Update& update) {
+        const auto storage = m_telemetry_device_model_storage;
+        if (storage != nullptr) {
+            storage->on_update(update);
+        }
+    });
+
+    const auto mapping_path = mv_config.getTelemetryMappingPath();
+    if (mapping_path.empty()) {
+        EVLOG_info << "telemetry: no mapping file configured; nothing is exposed to the CSMS";
+        return;
+    }
+
+    const auto load = module::device_model::load_telemetry_mappings(fs::path(mapping_path));
+    for (const auto& error : load.errors) {
+        EVLOG_error << "telemetry: " << error;
+    }
+    for (const auto& rejected : load.rejected) {
+        EVLOG_warning << "telemetry: " << rejected;
+    }
+    if (load.mappings.empty()) {
+        return;
+    }
+
+    // The definitions come from the producers, so the data type, unit and bounds of a device model
+    // variable are the ones the publishing module declared in its manifest.
+    m_telemetry_sink->resolve_definitions();
+    auto storage = std::make_shared<module::device_model::TelemetryDeviceModelStorage>(
+        load.mappings, m_telemetry_sink->definitions());
+    for (const auto& unavailable : storage->unavailable()) {
+        EVLOG_info << "telemetry: " << unavailable;
+    }
+    if (storage->mappings().empty()) {
+        EVLOG_warning << "telemetry: none of the " << load.mappings.size()
+                      << " mapped entries is servable here; nothing is exposed to the CSMS";
+        return;
+    }
+
+    // Curation cuts both ways: the CSMS sees only what the mapping names, and the producers are
+    // asked for only what the mapping names, so an unmapped entry is never even published.
+    std::map<Everest::telemetry::SetKey, std::vector<std::string>> interest;
+    for (const auto& [target, mapping] : storage->mappings()) {
+        interest[mapping.flow].push_back(mapping.entry);
+        EVLOG_info << "telemetry: serving " << mapping.to_string();
+    }
+    m_telemetry_device_model_storage = storage;
+    const auto flows = m_telemetry_sink->declare_interest(interest);
+    EVLOG_info << "telemetry: " << storage->mappings().size() << " device model variables from " << flows
+               << " telemetry set(s)";
+}
+
 void GenericOcpp::shutdown() {
     // Order matters: set both gates before stopping the timer, then block on recompute_mutex to
     // wait out a recompute already inside mv_charge_point.
@@ -1865,6 +1927,12 @@ void GenericOcpp::shutdown() {
 
     // Unblock any ConnectivityManager thread waiting on a pending configure_network future.
     drain_pending_network_config_requests();
+
+    // Stop the producers. Publishing to a subscriber that is going away costs the broker and the
+    // producer's rate budget for nothing.
+    if (m_telemetry_sink != nullptr) {
+        m_telemetry_sink->withdraw();
+    }
 }
 
 bool GenericOcpp::ocpp_2_selected() const {

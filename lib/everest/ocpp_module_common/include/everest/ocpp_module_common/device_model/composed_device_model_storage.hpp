@@ -71,8 +71,11 @@ private:
 ///                         get_device_model() to build the per-variable source map. A null pointer
 ///                         raises std::invalid_argument.
 /// \param everest_storage  Registered under "EVEREST"; a null pointer is skipped with a warning.
-/// \return The composed storage with both sources registered.
-std::unique_ptr<ComposedDeviceModelStorage>
-make_composed_device_model_storage(std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> ocpp_storage,
-                                   std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> everest_storage);
+/// \param telemetry_storage Registered under "TELEMETRY"; a null pointer is skipped silently, which
+///                         is the ordinary case of a station that exposes no telemetry.
+/// \return The composed storage with the given sources registered.
+std::unique_ptr<ComposedDeviceModelStorage> make_composed_device_model_storage(
+    std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> ocpp_storage,
+    std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> everest_storage,
+    std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> telemetry_storage = nullptr);
 } // namespace ocpp_module_common::device_model

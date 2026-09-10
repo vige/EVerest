@@ -71,6 +71,9 @@ int ConfigAccess::getResetStopDelay() const {
 std::string ConfigAccess::getUserConfigPath() const {
     return m_config.UserConfigPath;
 }
+std::string ConfigAccess::getTelemetryMappingPath() const {
+    return m_config.TelemetryMappingPath;
+}
 
 OCPPmulti::~OCPPmulti() {
     m_ocpp.shutdown();
@@ -115,6 +118,11 @@ void OCPPmulti::init() {
     // both members are fully constructed here; safe to bind m_ocpp as the callback sink
     m_charge_point.set_callbacks(m_ocpp);
     m_ocpp.init();
+}
+
+void OCPPmulti::shutdown() {
+    // Teardown order is load-bearing and lives in the destructor, which gates the callback sink
+    // before tearing down the callback source. Nothing to add here.
 }
 
 void OCPPmulti::ready() {

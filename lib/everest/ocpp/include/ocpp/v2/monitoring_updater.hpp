@@ -161,6 +161,19 @@ private:
     /// and updates our internal monitors with the new database data
     void update_periodic_monitors_internal();
 
+    /// \brief Reads the current value of every delta and threshold monitor and evaluates it.
+    ///
+    /// Those monitors are otherwise evaluated only from the variable listener, which fires when
+    /// something writes through DeviceModel::set_value. A variable whose value is produced on read
+    /// -- one served live by a storage backend rather than written into it -- never writes, so its
+    /// monitors would never be evaluated at all. This runs on the monitor timer, in the same pass
+    /// that walks the periodic monitors, so all monitor bookkeeping stays on one thread.
+    ///
+    /// Evaluation goes through the same evaluate_monitor as the listener path, so a variable that
+    /// does write behaves exactly as before: the state machine is idempotent, and a delta advances
+    /// its reference only when it fires.
+    void update_pull_monitors_internal();
+
     void get_monitoring_info(bool& out_is_offline, int& out_offline_severity, int& out_active_monitoring_level,
                              MonitoringBaseEnum& out_active_monitoring_base);
 
@@ -176,6 +189,12 @@ private:
     is_offline is_chargepoint_offline;
 
     std::unordered_map<std::int32_t, UpdaterMonitorMeta> updater_monitors_meta;
+
+    /// \brief Last value read by update_pull_monitors_internal, per monitor id.
+    ///
+    /// The listener path is handed the previous value by whoever wrote it. A pull has to remember
+    /// it, and only the pull path may write here.
+    std::unordered_map<std::int32_t, std::string> pulled_values;
 };
 
 } // namespace ocpp::v2

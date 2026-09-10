@@ -3,6 +3,8 @@
 
 #include <ocpp/v2/monitoring_updater.hpp>
 
+#include <set>
+
 #include <chrono>
 #include <everest/logging.hpp>
 
@@ -449,6 +451,74 @@ void MonitoringUpdater::update_periodic_monitors_internal() {
     }
 }
 
+void MonitoringUpdater::update_pull_monitors_internal() {
+    std::vector<MonitoringData> monitored;
+    try {
+        monitored = this->device_model.get_monitors({}, {});
+    } catch (const DeviceModelError& e) {
+        EVLOG_warning << "Could not enumerate monitors for the pull pass: " << e.what();
+        return;
+    }
+
+    std::set<std::int32_t> seen;
+
+    for (const auto& data : monitored) {
+        const auto meta_data = this->device_model.get_variable_meta_data(data.component, data.variable);
+        if (not meta_data.has_value()) {
+            continue;
+        }
+
+        // Read once per variable, however many monitors it carries.
+        std::string value_current;
+        bool have_value = false;
+
+        for (const auto& [monitor_id, monitor_meta] : meta_data.value().monitors) {
+            // Periodic monitors report on their own schedule and are handled by the periodic pass.
+            if (monitor_meta.monitor.type == MonitorEnum::Periodic or
+                monitor_meta.monitor.type == MonitorEnum::PeriodicClockAligned) {
+                continue;
+            }
+
+            if (not have_value) {
+                const auto status = this->device_model.get_variable(data.component, data.variable,
+                                                                    AttributeEnum::Actual, value_current, true);
+                if (status != GetVariableStatusEnum::Accepted) {
+                    // A variable that has no value yet is not an error: a telemetry entry that has
+                    // never been published has nothing to compare against.
+                    break;
+                }
+                have_value = true;
+            }
+
+            seen.insert(monitor_id);
+
+            // On the first pass a variable has no previous value of its own. Using the current one
+            // means a value that is already over a threshold still triggers -- a threshold is
+            // evaluated against the value, not against the change -- while a boolean or string
+            // delta does not fire spuriously on the first look.
+            const auto previous = this->pulled_values.find(monitor_id);
+            const std::string& value_previous = previous == this->pulled_values.end() ? value_current
+                                                                                       : previous->second;
+
+            VariableAttribute attribute;
+            attribute.type = AttributeEnum::Actual;
+            attribute.mutability =
+                this->device_model.get_mutability(data.component, data.variable, AttributeEnum::Actual);
+            attribute.value = value_current;
+
+            evaluate_monitor(monitor_meta, data.component, data.variable, meta_data.value().characteristics, attribute,
+                             value_previous, value_current);
+
+            this->pulled_values[monitor_id] = value_current;
+        }
+    }
+
+    // Forget monitors that are gone, so a re-used id cannot inherit a stale previous value.
+    for (auto it = std::begin(this->pulled_values); it != std::end(this->pulled_values);) {
+        it = seen.count(it->first) == 0 ? this->pulled_values.erase(it) : std::next(it);
+    }
+}
+
 void MonitoringUpdater::process_monitor_meta_internal(UpdaterMonitorMeta& updater_meta_data) {
     const auto& monitor_meta = updater_meta_data.monitor_meta;
     const auto& monitor = monitor_meta.monitor;
@@ -597,6 +667,8 @@ void MonitoringUpdater::process_monitors_internal(bool allow_periodics, bool all
     if (allow_periodics) {
         // Rebuild the periodic monitor information
         update_periodic_monitors_internal();
+        // And evaluate the delta and threshold monitors whose variables never announce a change
+        update_pull_monitors_internal();
     }
 
     // Iterate all internal monitors and process them

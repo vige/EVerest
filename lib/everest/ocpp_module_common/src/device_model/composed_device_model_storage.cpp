@@ -7,6 +7,7 @@
 
 static constexpr auto VARIABLE_SOURCE_OCPP = "OCPP";
 static constexpr auto VARIABLE_SOURCE_EVEREST = "EVEREST";
+static constexpr auto VARIABLE_SOURCE_TELEMETRY = "TELEMETRY";
 
 namespace ocpp_module_common::device_model {
 
@@ -98,21 +99,28 @@ ocpp::v2::SetVariableStatusEnum ComposedDeviceModelStorage::set_variable_attribu
 std::optional<ocpp::v2::VariableMonitoringMeta>
 ComposedDeviceModelStorage::set_monitoring_data(const ocpp::v2::SetMonitoringData& data,
                                                 const ocpp::v2::VariableMonitorType type) {
-    if (this->device_model_storages.find(VARIABLE_SOURCE_OCPP) == this->device_model_storages.end()) {
-        EVLOG_error << "OCPP device model storage not registered, cannot set monitoring data";
+    // A monitor belongs with the variable it watches. Sending every monitor to the OCPP source
+    // meant a monitor could only ever be set on a variable that source knows: the SQLite insert
+    // needs a VARIABLE_ID, and a variable owned by another source has no row to hang one on.
+    const auto variable_source = get_variable_source(data.component, data.variable);
+    const auto storage = this->device_model_storages.find(variable_source);
+    if (storage == this->device_model_storages.end()) {
+        EVLOG_error << "Device model storage '" << variable_source << "' not registered, cannot set monitoring data";
         return std::nullopt;
     }
-    return this->device_model_storages.at(VARIABLE_SOURCE_OCPP)->set_monitoring_data(data, type);
+    return storage->second->set_monitoring_data(data, type);
 }
 
 bool ComposedDeviceModelStorage::update_monitoring_reference(const int32_t monitor_id,
                                                              const std::string& reference_value) {
-    if (this->device_model_storages.find(VARIABLE_SOURCE_OCPP) == this->device_model_storages.end()) {
-        EVLOG_error << "OCPP device model storage not registered, cannot update monitoring reference";
-        return false;
+    // A monitor id carries no hint of which source issued it, so ask each in turn and stop at the
+    // one that recognises it.
+    for (const auto& [storage_id, storage] : this->device_model_storages) {
+        if (storage->update_monitoring_reference(monitor_id, reference_value)) {
+            return true;
+        }
     }
-    return this->device_model_storages.at(VARIABLE_SOURCE_OCPP)
-        ->update_monitoring_reference(monitor_id, reference_value);
+    return false;
 }
 
 std::vector<ocpp::v2::VariableMonitoringMeta>
@@ -128,19 +136,24 @@ ComposedDeviceModelStorage::get_monitoring_data(const std::vector<ocpp::v2::Moni
 
 ocpp::v2::ClearMonitoringStatusEnum ComposedDeviceModelStorage::clear_variable_monitor(int monitor_id,
                                                                                        bool allow_protected) {
-    if (this->device_model_storages.find(VARIABLE_SOURCE_OCPP) == this->device_model_storages.end()) {
-        EVLOG_error << "OCPP device model storage not registered, cannot clear variable monitor";
-        return ocpp::v2::ClearMonitoringStatusEnum::Rejected;
+    // Same as the reference update: the id is all the CSMS gives us. A Rejected from the source that
+    // owns the monitor is the answer; NotFound only means "not mine", so keep asking.
+    auto status = ocpp::v2::ClearMonitoringStatusEnum::NotFound;
+    for (const auto& [storage_id, storage] : this->device_model_storages) {
+        status = storage->clear_variable_monitor(monitor_id, allow_protected);
+        if (status != ocpp::v2::ClearMonitoringStatusEnum::NotFound) {
+            return status;
+        }
     }
-    return this->device_model_storages.at(VARIABLE_SOURCE_OCPP)->clear_variable_monitor(monitor_id, allow_protected);
+    return status;
 }
 
 int32_t ComposedDeviceModelStorage::clear_custom_variable_monitors() {
-    if (this->device_model_storages.find(VARIABLE_SOURCE_OCPP) == this->device_model_storages.end()) {
-        EVLOG_error << "OCPP device model storage not registered, cannot clear custom variable monitors";
-        return 0;
+    std::int32_t cleared = 0;
+    for (const auto& [storage_id, storage] : this->device_model_storages) {
+        cleared += storage->clear_custom_variable_monitors();
     }
-    return this->device_model_storages.at(VARIABLE_SOURCE_OCPP)->clear_custom_variable_monitors();
+    return cleared;
 }
 
 void ComposedDeviceModelStorage::check_integrity() {
@@ -178,7 +191,8 @@ ocpp_module_common::device_model::ComposedDeviceModelStorage::get_variable_sourc
 
 std::unique_ptr<ComposedDeviceModelStorage>
 make_composed_device_model_storage(std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> ocpp_storage,
-                                   std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> everest_storage) {
+                                   std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> everest_storage,
+                                   std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> telemetry_storage) {
     if (ocpp_storage == nullptr) {
         throw std::invalid_argument("Cannot compose device model storage: the OCPP device model storage is null");
     }
@@ -192,6 +206,10 @@ make_composed_device_model_storage(std::shared_ptr<ocpp::v2::DeviceModelStorageI
     } else {
         EVLOG_warning << "No EVerest device model storage provided; composed device model contains only the "
                          "OCPP source";
+    }
+    if (telemetry_storage != nullptr) {
+        composed_device_model_storage->register_device_model_storage(VARIABLE_SOURCE_TELEMETRY,
+                                                                     std::move(telemetry_storage));
     }
     return composed_device_model_storage;
 }

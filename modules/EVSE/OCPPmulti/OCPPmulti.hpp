@@ -5,7 +5,7 @@
 
 //
 // AUTO GENERATED - MARKED REGIONS WILL BE KEPT
-// template version 2
+// template version 3
 //
 
 #include "ld-ev.hpp"
@@ -29,6 +29,7 @@
 #include <generated/interfaces/ocpp_data_transfer/Interface.hpp>
 #include <generated/interfaces/reservation/Interface.hpp>
 #include <generated/interfaces/system/Interface.hpp>
+#include <generated/interfaces/telemetry/Interface.hpp>
 
 // ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
 // insert your custom include headers here
@@ -67,6 +68,7 @@ public:
     [[nodiscard]] std::string getRequestCompositeScheduleUnit() const override;
     [[nodiscard]] int getResetStopDelay() const override;
     [[nodiscard]] std::string getUserConfigPath() const override;
+    [[nodiscard]] std::string getTelemetryMappingPath() const override;
 };
 
 } // namespace module
@@ -97,6 +99,7 @@ struct Conf {
     std::string RequestCompositeScheduleUnit;
     int ResetStopDelay;
     std::string UserConfigPath;
+    std::string TelemetryMappingPath;
 };
 
 class OCPPmulti : public Everest::ModuleBase {
@@ -115,7 +118,8 @@ public:
               std::vector<std::unique_ptr<iso15118_extensionsIntf>> r_extensions_15118,
               std::vector<std::unique_ptr<grid_supportIntf>> r_grid_support,
               std::vector<std::unique_ptr<reservationIntf>> r_reservation,
-              std::unique_ptr<evse_securityIntf> r_security, std::unique_ptr<systemIntf> r_system, Conf& config) :
+              std::unique_ptr<evse_securityIntf> r_security, std::vector<std::unique_ptr<telemetryIntf>> r_telemetry,
+              std::unique_ptr<systemIntf> r_system, Conf& config) :
         ModuleBase(info),
         mqtt(mqtt_provider),
         p_auth_validator(std::move(p_auth_validator)),
@@ -133,6 +137,7 @@ public:
         r_grid_support(std::move(r_grid_support)),
         r_reservation(std::move(r_reservation)),
         r_security(std::move(r_security)),
+        r_telemetry(std::move(r_telemetry)),
         r_system(std::move(r_system)),
         config(config){};
 
@@ -152,6 +157,7 @@ public:
     const std::vector<std::unique_ptr<grid_supportIntf>> r_grid_support;
     const std::vector<std::unique_ptr<reservationIntf>> r_reservation;
     const std::unique_ptr<evse_securityIntf> r_security;
+    const std::vector<std::unique_ptr<telemetryIntf>> r_telemetry;
     const std::unique_ptr<systemIntf> r_system;
     const Conf& config;
 
@@ -170,7 +176,7 @@ public:
         m_config,
         {*p_auth_validator, *p_auth_provider, *p_data_transfer, *p_ocpp_generic, *p_session_cost},
         {*r_auth, r_charger_information, r_data_transfer, r_display_message, r_evse_energy_sink, r_evse_manager,
-         r_extensions_15118, r_grid_support, r_reservation, *r_security, *r_system}};
+         r_extensions_15118, r_grid_support, r_reservation, *r_security, r_telemetry, *r_system}};
     // ev@1fce4c5e-0ab8-41bb-90f7-14277703d2ac:v1
 
 protected:
@@ -182,6 +188,7 @@ private:
     friend class LdEverest;
     void init();
     void ready();
+    void shutdown();
 
     // ev@211cfdbe-f69a-4cd6-a4ec-f8aaa3d1b6c8:v1
     // insert your private definitions here

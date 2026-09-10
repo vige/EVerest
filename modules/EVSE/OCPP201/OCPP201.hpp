@@ -70,7 +70,7 @@ using ocpp_module_common::TxEventEffect;
 using ocpp_module_common::TxStartStopPoint;
 } // namespace module
 
-#include "device_model/telemetry_device_model_storage.hpp"
+#include <everest/ocpp_module_common/device_model/telemetry_device_model_storage.hpp>
 // ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
 
 namespace module {
@@ -174,10 +174,10 @@ private:
     /// device model structure once at construction: a component that is not there by then is not
     /// there at all.
     /// \returns the storage, or nullptr when no telemetry is configured or none of it is servable
-    std::shared_ptr<telemetry_dm::TelemetryDeviceModelStorage> make_telemetry_device_model_storage();
+    std::shared_ptr<device_model::TelemetryDeviceModelStorage> make_telemetry_device_model_storage();
 
     std::unique_ptr<Everest::telemetry::Sink> telemetry_sink;
-    std::shared_ptr<telemetry_dm::TelemetryDeviceModelStorage> telemetry_device_model_storage;
+    std::shared_ptr<device_model::TelemetryDeviceModelStorage> telemetry_device_model_storage;
     std::shared_ptr<device_model::EverestDeviceModelStorage> everest_device_model_storage;
     std::unique_ptr<TransactionHandler> transaction_handler;
     Everest::SteadyTimer charging_schedules_timer;

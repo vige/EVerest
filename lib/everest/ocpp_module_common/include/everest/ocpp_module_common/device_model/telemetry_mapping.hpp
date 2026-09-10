@@ -21,7 +21,7 @@
 /// differently from the module that publishes it.
 ///
 /// Nothing here reads a value or talks to the framework, so it is testable on its own.
-namespace module::telemetry_dm {
+namespace ocpp_module_common::device_model {
 
 /// \brief One validated mapping: an OCPP target and the single telemetry entry it reads from.
 struct TelemetryMapping {
@@ -61,4 +61,4 @@ struct TelemetryMappingLoad {
 /// silently serving nothing would hide it.
 TelemetryMappingLoad load_telemetry_mappings(const std::filesystem::path& path);
 
-} // namespace module::telemetry_dm
+} // namespace ocpp_module_common::device_model

@@ -13,9 +13,9 @@
 #include <generated/types/telemetry.hpp>
 #include <ocpp/v2/device_model_storage_interface.hpp>
 
-#include "telemetry_mapping.hpp"
+#include <everest/ocpp_module_common/device_model/telemetry_mapping.hpp>
 
-namespace module::telemetry_dm {
+namespace ocpp_module_common::device_model {
 
 /// \brief The source id this storage registers under in the composed device model storage.
 inline constexpr auto VARIABLE_SOURCE_TELEMETRY = "TELEMETRY";
@@ -33,6 +33,12 @@ inline constexpr auto VARIABLE_SOURCE_TELEMETRY = "TELEMETRY";
 /// variable is only ever read on request, so the values live in a map that the sink's update handler
 /// writes and a read copies out of. The value of an entry that has not arrived yet is absent rather
 /// than zero: reporting a number the station never measured would be a lie the CSMS cannot detect.
+///
+/// Monitors set by the CSMS live here too, in memory and keyed by the variable they watch. They are
+/// deliberately not persisted: a monitor on a measurement is a diagnostic a CSMS sets for as long as
+/// it is interested, and a station that came back from a reboot with monitors on values it may no
+/// longer publish would report events nobody asked for. Monitor ids are allocated from a range far
+/// above the SQLite row ids the OCPP-source storage hands out, so the two can never collide.
 ///
 /// A read must never issue an EVerest framework command: libocpp calls it while holding the device
 /// model lock, and a command reply travels back through the MQTT machinery whose handler thread may
@@ -82,6 +88,12 @@ private:
     /// \returns the string form of the value of \p mapping, or nothing when it has not arrived yet
     std::optional<std::string> read(const TelemetryMapping& mapping) const;
 
+    /// \returns the monitors of \p target that satisfy \p criteria
+    /// \pre monitor_mutex is held
+    std::vector<ocpp::v2::VariableMonitoringMeta>
+    monitors_of(const ocpp::v2::ComponentVariable& target,
+                const std::vector<ocpp::v2::MonitoringCriterionEnum>& criteria) const;
+
     std::map<ocpp::v2::ComponentVariable, TelemetryMapping> table;
     /// target -> the entry type its set declared, which is how a value is rendered
     std::map<ocpp::v2::ComponentVariable, types::telemetry::EntryType> entry_types;
@@ -91,6 +103,18 @@ private:
     mutable std::mutex mutex;
     /// flow -> entry -> last value seen, as the string the device model reports
     std::map<Everest::telemetry::SetKey, std::map<std::string, std::string>> values;
+
+    /// \brief The first monitor id this storage hands out.
+    ///
+    /// The OCPP-source storage numbers its monitors with SQLite row ids, which start at 1. Ids are
+    /// the only handle a CSMS has on a monitor -- ClearVariableMonitoring names an id and nothing
+    /// else -- so the two ranges must not overlap.
+    static constexpr std::int32_t FIRST_MONITOR_ID = 0x20000000;
+
+    mutable std::mutex monitor_mutex;
+    std::int32_t next_monitor_id{FIRST_MONITOR_ID};
+    /// target -> monitor id -> the monitor
+    std::map<ocpp::v2::ComponentVariable, std::map<std::int32_t, ocpp::v2::VariableMonitoringMeta>> monitors;
 };
 
 /// \returns the string form of the JSON scalar \p value as the device model reports it
@@ -99,4 +123,4 @@ private:
 /// 40.5 and seeing 40.500000, and between an integer entry arriving as 7 and as 7.0.
 std::string render_value(const nlohmann::json& value, types::telemetry::EntryType type);
 
-} // namespace module::telemetry_dm
+} // namespace ocpp_module_common::device_model

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Pionix GmbH and Contributors to EVerest
 
-#include "telemetry_mapping.hpp"
+#include <everest/ocpp_module_common/device_model/telemetry_mapping.hpp>
 
 #include <algorithm>
 
@@ -11,7 +11,7 @@
 
 #include <everest/utils/yaml_loader.hpp>
 
-namespace module::telemetry_dm {
+namespace ocpp_module_common::device_model {
 
 namespace {
 
@@ -171,4 +171,4 @@ TelemetryMappingLoad load_telemetry_mappings(const std::filesystem::path& path) 
     return load;
 }
 
-} // namespace module::telemetry_dm
+} // namespace ocpp_module_common::device_model

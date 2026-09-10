@@ -29,6 +29,7 @@ struct ConfigStub : public ocpp_multi::ConfigInterface {
     std::string RequestCompositeScheduleUnit{"A"};
     int ResetStopDelay{0};
     std::string UserConfigPath{"user_config"};
+    std::string TelemetryMappingPath{};
 
     [[nodiscard]] std::string getChargePointConfigPath() const override {
         return ChargePointConfigPath;
@@ -92,6 +93,9 @@ struct ConfigStub : public ocpp_multi::ConfigInterface {
     }
     [[nodiscard]] std::string getUserConfigPath() const override {
         return UserConfigPath;
+    }
+    [[nodiscard]] std::string getTelemetryMappingPath() const override {
+        return TelemetryMappingPath;
     }
 };
 

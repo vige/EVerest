@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Pionix GmbH and Contributors to EVerest
 
-#include "telemetry_device_model_storage.hpp"
+#include <everest/ocpp_module_common/device_model/telemetry_device_model_storage.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -12,7 +12,7 @@
 #include <everest/logging.hpp>
 #include <ocpp/v2/comparators.hpp>
 
-namespace module::telemetry_dm {
+namespace ocpp_module_common::device_model {
 
 namespace {
 
@@ -68,6 +68,33 @@ const types::telemetry::EntryDefinition* entry_of(const types::telemetry::SetDef
     const auto it = std::find_if(definition.entries.begin(), definition.entries.end(),
                                  [&name](const auto& entry) { return entry.name == name; });
     return it == definition.entries.end() ? nullptr : &*it;
+}
+
+/// \returns true when \p type is one of \p criteria, or when no criteria were given
+bool matches_criteria(ocpp::v2::MonitorEnum type, const std::vector<ocpp::v2::MonitoringCriterionEnum>& criteria) {
+    if (criteria.empty()) {
+        return true;
+    }
+    for (const auto& criterion : criteria) {
+        switch (criterion) {
+        case ocpp::v2::MonitoringCriterionEnum::ThresholdMonitoring:
+            if (type == ocpp::v2::MonitorEnum::UpperThreshold or type == ocpp::v2::MonitorEnum::LowerThreshold) {
+                return true;
+            }
+            break;
+        case ocpp::v2::MonitoringCriterionEnum::DeltaMonitoring:
+            if (type == ocpp::v2::MonitorEnum::Delta) {
+                return true;
+            }
+            break;
+        case ocpp::v2::MonitoringCriterionEnum::PeriodicMonitoring:
+            if (type == ocpp::v2::MonitorEnum::Periodic or type == ocpp::v2::MonitorEnum::PeriodicClockAligned) {
+                return true;
+            }
+            break;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -217,16 +244,73 @@ ocpp::v2::SetVariableStatusEnum TelemetryDeviceModelStorage::set_variable_attrib
     return ocpp::v2::SetVariableStatusEnum::Rejected;
 }
 
+std::vector<ocpp::v2::VariableMonitoringMeta>
+TelemetryDeviceModelStorage::monitors_of(const ocpp::v2::ComponentVariable& target,
+                                         const std::vector<ocpp::v2::MonitoringCriterionEnum>& criteria) const {
+    std::vector<ocpp::v2::VariableMonitoringMeta> found;
+    const auto it = this->monitors.find(target);
+    if (it == this->monitors.end()) {
+        return found;
+    }
+    for (const auto& [id, monitor] : it->second) {
+        if (not matches_criteria(monitor.monitor.type, criteria)) {
+            continue;
+        }
+        found.push_back(monitor);
+    }
+    return found;
+}
+
 std::optional<ocpp::v2::VariableMonitoringMeta>
 TelemetryDeviceModelStorage::set_monitoring_data(const ocpp::v2::SetMonitoringData& data,
                                                  const ocpp::v2::VariableMonitorType type) {
-    // Monitors are held by the OCPP-source storage, which is where the composed storage sends every
-    // monitoring write regardless of who owns the variable.
-    return std::nullopt;
+    const ocpp::v2::ComponentVariable target{data.component, data.variable, std::nullopt};
+    const auto mapping = this->table.find(target);
+    if (mapping == this->table.end()) {
+        return std::nullopt;
+    }
+
+    ocpp::v2::VariableMonitoringMeta meta;
+    meta.type = type;
+    meta.monitor.type = data.type;
+    meta.monitor.severity = data.severity;
+    meta.monitor.value = data.value;
+    meta.monitor.transaction = data.transaction.value_or(false);
+
+    if (data.type == ocpp::v2::MonitorEnum::Delta) {
+        // A delta is measured from a reference, so a delta monitor on an entry that has not arrived
+        // yet has nothing to measure from. Refusing is better than seeding a zero, which would fire
+        // once, spuriously, the moment the first real value shows up.
+        const auto value = read(mapping->second);
+        if (not value.has_value()) {
+            EVLOG_warning << "telemetry: refusing a delta monitor on " << mapping->second.to_string()
+                          << ": no value has been published yet, so there is no reference to measure from";
+            return std::nullopt;
+        }
+        meta.reference_value = *value;
+    }
+
+    std::lock_guard<std::mutex> lock{this->monitor_mutex};
+    if (data.id.has_value()) {
+        // An update names the id. Replacing in place keeps the id the CSMS holds valid.
+        meta.monitor.id = *data.id;
+    } else {
+        meta.monitor.id = this->next_monitor_id++;
+    }
+    this->monitors[target][meta.monitor.id] = meta;
+    return meta;
 }
 
 bool TelemetryDeviceModelStorage::update_monitoring_reference(const int32_t monitor_id,
                                                               const std::string& reference_value) {
+    std::lock_guard<std::mutex> lock{this->monitor_mutex};
+    for (auto& [target, by_id] : this->monitors) {
+        const auto it = by_id.find(monitor_id);
+        if (it != by_id.end()) {
+            it->second.reference_value = reference_value;
+            return true;
+        }
+    }
     return false;
 }
 
@@ -234,19 +318,46 @@ std::vector<ocpp::v2::VariableMonitoringMeta>
 TelemetryDeviceModelStorage::get_monitoring_data(const std::vector<ocpp::v2::MonitoringCriterionEnum>& criteria,
                                                  const ocpp::v2::Component& component_id,
                                                  const ocpp::v2::Variable& variable_id) {
-    return {};
+    std::lock_guard<std::mutex> lock{this->monitor_mutex};
+    return monitors_of(ocpp::v2::ComponentVariable{component_id, variable_id, std::nullopt}, criteria);
 }
 
 ocpp::v2::ClearMonitoringStatusEnum TelemetryDeviceModelStorage::clear_variable_monitor(int monitor_id,
                                                                                         bool allow_protected) {
+    std::lock_guard<std::mutex> lock{this->monitor_mutex};
+    for (auto& [target, by_id] : this->monitors) {
+        const auto it = by_id.find(monitor_id);
+        if (it == by_id.end()) {
+            continue;
+        }
+        if (not allow_protected and it->second.type != ocpp::v2::VariableMonitorType::CustomMonitor) {
+            return ocpp::v2::ClearMonitoringStatusEnum::Rejected;
+        }
+        by_id.erase(it);
+        return ocpp::v2::ClearMonitoringStatusEnum::Accepted;
+    }
+    // Not ours. The composed storage asks every source in turn, because a monitor id carries no
+    // hint of which one issued it.
     return ocpp::v2::ClearMonitoringStatusEnum::NotFound;
 }
 
 int32_t TelemetryDeviceModelStorage::clear_custom_variable_monitors() {
-    return 0;
+    std::lock_guard<std::mutex> lock{this->monitor_mutex};
+    std::int32_t cleared = 0;
+    for (auto& [target, by_id] : this->monitors) {
+        for (auto it = by_id.begin(); it != by_id.end();) {
+            if (it->second.type == ocpp::v2::VariableMonitorType::CustomMonitor) {
+                it = by_id.erase(it);
+                ++cleared;
+            } else {
+                ++it;
+            }
+        }
+    }
+    return cleared;
 }
 
 void TelemetryDeviceModelStorage::check_integrity() {
 }
 
-} // namespace module::telemetry_dm
+} // namespace ocpp_module_common::device_model

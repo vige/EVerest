@@ -179,6 +179,13 @@ config:
       written to the user config file.
     type: string
     default: user_config.json
+  TelemetryMappingPath:
+    description: >-
+      OCPP 2.x
+      Path to the YAML file that maps telemetry entries onto device model variables. Empty means no
+      telemetry is exposed to the CSMS, whatever the module is wired to.
+    type: string
+    default: ""
 provides:
   auth_validator:
     description: Validates the provided token using CSMS, AuthorizationList or AuthorizationCache
@@ -236,6 +243,10 @@ requires:
     interface: evse_security
     min_connections: 1
     max_connections: 1
+  telemetry:
+    interface: telemetry
+    min_connections: 0
+    max_connections: 128
   system:
     interface: system
     min_connections: 1
