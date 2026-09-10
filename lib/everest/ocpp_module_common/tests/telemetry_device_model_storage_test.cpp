@@ -10,44 +10,13 @@ namespace {
 using ocpp_module_common::device_model::TelemetryDeviceModelStorage;
 using ocpp_module_common::device_model::TelemetryMapping;
 using ocpp_module_common::device_model::VARIABLE_SOURCE_TELEMETRY;
+using ocpp_module_common::otlp::Export;
+using ocpp_module_common::otlp::Sample;
 
-const Everest::telemetry::SetKey LIVEDATA{"powermeter_1", "livedata"};
-
-types::telemetry::EntryDefinition entry(const std::string& name, types::telemetry::EntryType type) {
-    types::telemetry::EntryDefinition definition;
-    definition.name = name;
-    definition.description = name;
-    definition.type = type;
-    return definition;
-}
-
-/// One set declaring a bounded temperature, an integer count and a state with an allowed-value list.
-types::telemetry::SetDefinition livedata() {
-    types::telemetry::SetDefinition definition;
-    definition.module_type = "PowerMeterExample";
-    definition.set = "livedata";
-    definition.description = "live";
-
-    auto temperature = entry("temperature_C", types::telemetry::EntryType::number);
-    temperature.unit = "Celsius";
-    temperature.minimum = -40;
-    temperature.maximum = 120;
-
-    auto count = entry("error_count", types::telemetry::EntryType::integer);
-    count.minimum = 0;
-
-    auto state = entry("fw_state", types::telemetry::EntryType::string);
-    state.values_list = std::vector<std::string>{"Idle", "Measuring"};
-
-    definition.entries = {temperature, count, state};
-    return definition;
-}
-
-std::map<Everest::telemetry::SetKey, types::telemetry::SetDefinition> definitions() {
-    return {{LIVEDATA, livedata()}};
-}
-
-TelemetryMapping mapping_of(const std::string& component, const std::string& variable, const std::string& entry_name,
+/// \brief A mapping onto \p metric, described the way the mapping file would describe it.
+TelemetryMapping mapping_of(const std::string& component, const std::string& variable, const std::string& metric,
+                            ocpp::v2::DataEnum type = ocpp::v2::DataEnum::decimal,
+                            std::map<std::string, std::string> attributes = {},
                             std::optional<std::int32_t> evse = std::nullopt) {
     TelemetryMapping mapping;
     mapping.component.name = component;
@@ -57,104 +26,145 @@ TelemetryMapping mapping_of(const std::string& component, const std::string& var
         mapping.component.evse = id;
     }
     mapping.variable.name = variable;
-    mapping.flow = LIVEDATA;
-    mapping.entry = entry_name;
+    mapping.selector.metric = metric;
+    mapping.selector.attributes = std::move(attributes);
+    mapping.characteristics.dataType = type;
+    mapping.characteristics.supportsMonitoring = true;
+    mapping.characteristics.unit = "Celsius";
+    mapping.characteristics.minLimit = -40;
+    mapping.characteristics.maxLimit = 120;
     return mapping;
 }
 
-types::telemetry::Update update_of(json::object_t values) {
-    types::telemetry::Update update;
-    update.module_id = LIVEDATA.module_id;
-    update.module_type = "PowerMeterExample";
-    update.set = LIVEDATA.set;
-    update.timestamp = "2026-09-09T10:00:00Z";
-    update.values = std::move(values);
-    return update;
+/// \brief One export carrying one double data point.
+Export exported(const std::string& metric, double value, std::map<std::string, std::string> attributes = {}) {
+    Sample sample;
+    sample.metric = metric;
+    sample.as_double = value;
+    sample.attributes = std::move(attributes);
+    Export out;
+    out.samples.push_back(std::move(sample));
+    return out;
 }
 
-ocpp::v2::ComponentVariable target_of(const TelemetryMapping& mapping) {
-    return ocpp::v2::ComponentVariable{mapping.component, mapping.variable, std::nullopt};
+std::optional<std::string> value_of(TelemetryDeviceModelStorage& storage, const TelemetryMapping& mapping) {
+    const auto attribute =
+        storage.get_variable_attribute(mapping.component, mapping.variable, ocpp::v2::AttributeEnum::Actual);
+    return attribute.has_value() ? attribute->value : std::nullopt;
 }
 
-// The declaration the producer answers with is what describes the variable, not the mapping file.
-TEST(TelemetryDeviceModelStorage, DerivesCharacteristicsFromTheSetDeclaration) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C", 1);
-    const auto state = mapping_of("PowerMeterDC", "FirmwareState", "fw_state", 1);
-    TelemetryDeviceModelStorage storage({temperature, state}, definitions());
+// The characteristics a CSMS is told come from the mapping file, because OTLP carries none of them.
+TEST(TelemetryDeviceModelStorage, TakesCharacteristicsFromTheMapping) {
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature");
+    TelemetryDeviceModelStorage storage({temperature});
 
     const auto model = storage.get_device_model();
     ASSERT_EQ(model.size(), 1);
     const auto& variables = model.at(temperature.component);
-    ASSERT_EQ(variables.size(), 2);
+    ASSERT_EQ(variables.size(), 1);
 
     const auto& meta = variables.at(temperature.variable);
     EXPECT_EQ(meta.characteristics.dataType, ocpp::v2::DataEnum::decimal);
+    EXPECT_EQ(meta.characteristics.unit.value(), "Celsius");
     EXPECT_TRUE(meta.characteristics.supportsMonitoring);
-    ASSERT_TRUE(meta.characteristics.unit.has_value());
-    EXPECT_EQ(meta.characteristics.unit->get(), "Celsius");
-    EXPECT_FLOAT_EQ(meta.characteristics.minLimit.value(), -40.0F);
-    EXPECT_FLOAT_EQ(meta.characteristics.maxLimit.value(), 120.0F);
-    // Routing depends on this: the composed storage reads the source out of the declaration.
     ASSERT_TRUE(meta.source.has_value());
     EXPECT_EQ(meta.source.value(), VARIABLE_SOURCE_TELEMETRY);
-
-    // A string entry with an allowed-value list is an OptionList, so a CSMS can render the choice.
-    const auto& state_meta = variables.at(state.variable);
-    EXPECT_EQ(state_meta.characteristics.dataType, ocpp::v2::DataEnum::OptionList);
-    ASSERT_TRUE(state_meta.characteristics.valuesList.has_value());
-    EXPECT_EQ(state_meta.characteristics.valuesList->get(), "Idle,Measuring");
 }
 
-TEST(TelemetryDeviceModelStorage, DropsAMappingTheSetDoesNotDeclare) {
-    const auto good = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    const auto bad = mapping_of("PowerMeterDC", "Nonsense", "no_such_entry");
-    TelemetryDeviceModelStorage storage({good, bad}, definitions());
+// A mapped variable exists before anything has been measured, which is what lets a GetBaseReport at
+// boot be complete. It reads as absent rather than as a value the station never took.
+TEST(TelemetryDeviceModelStorage, ReportsNoValueBeforeTheFirstExport) {
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature");
+    TelemetryDeviceModelStorage storage({temperature});
 
-    EXPECT_EQ(storage.mappings().size(), 1);
-    ASSERT_EQ(storage.unavailable().size(), 1);
-    EXPECT_NE(storage.unavailable().front().find("no_such_entry"), std::string::npos);
+    EXPECT_EQ(storage.get_device_model().size(), 1);
+    EXPECT_FALSE(value_of(storage, temperature).has_value());
 }
 
-// A value that has never been published is absent, not zero: a CSMS cannot tell a made-up number
-// from a measured one.
-TEST(TelemetryDeviceModelStorage, ReportsNoValueBeforeTheFirstUpdate) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
+TEST(TelemetryDeviceModelStorage, ServesTheLastValueOfAMappedMetric) {
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature");
+    TelemetryDeviceModelStorage storage({temperature});
 
-    const auto attribute =
-        storage.get_variable_attribute(temperature.component, temperature.variable, ocpp::v2::AttributeEnum::Actual);
-    ASSERT_TRUE(attribute.has_value());
-    EXPECT_FALSE(attribute->value.has_value());
-    EXPECT_EQ(attribute->mutability, ocpp::v2::MutabilityEnum::ReadOnly);
-    EXPECT_FALSE(attribute->persistent.value());
+    EXPECT_EQ(storage.on_export(exported("powermeter.temperature", 40.5)), 1);
+    EXPECT_EQ(value_of(storage, temperature).value(), "40.5");
+
+    // the newest value replaces the last, which is the whole contract of a last-value store
+    EXPECT_EQ(storage.on_export(exported("powermeter.temperature", 41.25)), 1);
+    EXPECT_EQ(value_of(storage, temperature).value(), "41.25");
 }
 
-TEST(TelemetryDeviceModelStorage, ServesTheLastValueOfAMappedEntry) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
+// Anything may push a metric; only what the file names becomes a variable.
+TEST(TelemetryDeviceModelStorage, IgnoresAMetricNoMappingNames) {
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature");
+    TelemetryDeviceModelStorage storage({temperature});
 
-    EXPECT_EQ(storage.on_update(update_of({{"temperature_C", 40.5}, {"error_count", 3}})), 1);
-    const auto attribute =
-        storage.get_variable_attribute(temperature.component, temperature.variable, ocpp::v2::AttributeEnum::Actual);
-    ASSERT_TRUE(attribute->value.has_value());
-    EXPECT_EQ(attribute->value->get(), "40.5");
+    EXPECT_EQ(storage.on_export(exported("powermeter.humidity", 61.0)), 0);
+    EXPECT_FALSE(value_of(storage, temperature).has_value());
+}
 
-    // Only Actual exists. A measurement has no target or setpoint.
-    EXPECT_FALSE(
-        storage.get_variable_attribute(temperature.component, temperature.variable, ocpp::v2::AttributeEnum::Target)
-            .has_value());
+// One metric, one data point per EVSE: the attributes are what tell them apart.
+TEST(TelemetryDeviceModelStorage, SelectsADataPointByItsAttributes) {
+    const auto evse1 = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature",
+                                  ocpp::v2::DataEnum::decimal, {{"evse", "1"}}, 1);
+    const auto evse2 = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature",
+                                  ocpp::v2::DataEnum::decimal, {{"evse", "2"}}, 2);
+    TelemetryDeviceModelStorage storage({evse1, evse2});
+
+    Export both = exported("powermeter.temperature", 40.5, {{"evse", "1"}});
+    Sample second;
+    second.metric = "powermeter.temperature";
+    second.as_double = 31.0;
+    second.attributes = {{"evse", "2"}};
+    both.samples.push_back(second);
+
+    EXPECT_EQ(storage.on_export(both), 2);
+    EXPECT_EQ(value_of(storage, evse1).value(), "40.5");
+    EXPECT_EQ(value_of(storage, evse2).value(), "31");
+
+    // an attribute the mapping does not name is ignored, so a producer may add dimensions freely
+    Export extra = exported("powermeter.temperature", 44.0, {{"evse", "1"}, {"phase", "L2"}});
+    EXPECT_EQ(storage.on_export(extra), 1);
+    EXPECT_EQ(value_of(storage, evse1).value(), "44");
+
+    // and a point missing an attribute the mapping requires matches nothing
+    EXPECT_EQ(storage.on_export(exported("powermeter.temperature", 99.0)), 0);
+    EXPECT_EQ(value_of(storage, evse1).value(), "44");
+}
+
+// The data type the mapping declares decides how the value reads, so a CSMS is never told a
+// decimal for a variable it was told is an integer.
+TEST(TelemetryDeviceModelStorage, RendersAValueAsTheDeclaredDataType) {
+    const auto memory = mapping_of("Controller", "MemoryUsed", "system.memory.usage", ocpp::v2::DataEnum::integer);
+    TelemetryDeviceModelStorage storage({memory});
+
+    Sample sample;
+    sample.metric = "system.memory.usage";
+    sample.is_integer = true;
+    sample.as_int = 995311616;
+    Export out;
+    out.samples.push_back(sample);
+
+    EXPECT_EQ(storage.on_export(out), 1);
+    EXPECT_EQ(value_of(storage, memory).value(), "995311616");
+
+    // a producer that sends the same thing as a double still reads as an integer
+    EXPECT_EQ(storage.on_export(exported("system.memory.usage", 42.7)), 1);
+    EXPECT_EQ(value_of(storage, memory).value(), "43");
 }
 
 TEST(TelemetryDeviceModelStorage, RejectsAWriteFromTheCsms) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature");
+    TelemetryDeviceModelStorage storage({temperature});
 
+    // Telemetry flows one way: a CSMS that could write a measurement back could make the station
+    // report a value it never took.
     EXPECT_EQ(storage.set_variable_attribute_value(temperature.component, temperature.variable,
-                                                   ocpp::v2::AttributeEnum::Actual, "99", "CSMS"),
+                                                   ocpp::v2::AttributeEnum::Actual, "1.0", "CSMS"),
               ocpp::v2::SetVariableStatusEnum::Rejected);
 }
 
-ocpp::v2::SetMonitoringData monitor_request(const TelemetryMapping& mapping, ocpp::v2::MonitorEnum type, float value) {
+ocpp::v2::SetMonitoringData monitor_request(const TelemetryMapping& mapping, ocpp::v2::MonitorEnum type,
+                                            float value) {
     ocpp::v2::SetMonitoringData request;
     request.component = mapping.component;
     request.variable = mapping.variable;
@@ -167,8 +177,9 @@ ocpp::v2::SetMonitoringData monitor_request(const TelemetryMapping& mapping, ocp
 // The component config these variables are seeded into the device model database as. Getting this
 // wrong means the VARIABLE row is missing and a monitor has no row to hang off.
 TEST(TelemetryDeviceModelStorage, DescribesItsVariablesAsAComponentConfig) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C", 1);
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature",
+                                        ocpp::v2::DataEnum::decimal, {}, 1);
+    TelemetryDeviceModelStorage storage({temperature});
 
     const auto config = storage.component_config();
     ASSERT_EQ(config.size(), 1);
@@ -245,8 +256,8 @@ public:
 // Monitors belong in the database the variables were seeded into, so that they persist and so that
 // their ids come from the same sequence as every other monitor.
 TEST(TelemetryDeviceModelStorage, ForwardsMonitorsToTheSeededStore) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature");
+    TelemetryDeviceModelStorage storage({temperature});
     auto store = std::make_shared<FakeMonitorStore>();
     storage.set_monitor_store(store);
 
@@ -269,8 +280,8 @@ TEST(TelemetryDeviceModelStorage, ForwardsMonitorsToTheSeededStore) {
 // A delta monitor is valid before the first value arrives; it simply cannot fire yet. Refusing it
 // would deny the CSMS a monitor it is entitled to.
 TEST(TelemetryDeviceModelStorage, AcceptsADeltaMonitorBeforeAnyValueHasArrived) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature");
+    TelemetryDeviceModelStorage storage({temperature});
     auto store = std::make_shared<FakeMonitorStore>();
     storage.set_monitor_store(store);
 
@@ -281,8 +292,8 @@ TEST(TelemetryDeviceModelStorage, AcceptsADeltaMonitorBeforeAnyValueHasArrived) 
 }
 
 TEST(TelemetryDeviceModelStorage, AnswersNoMonitorCallWithoutAStore) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "powermeter.temperature");
+    TelemetryDeviceModelStorage storage({temperature});
 
     EXPECT_FALSE(storage
                      .set_monitoring_data(monitor_request(temperature, ocpp::v2::MonitorEnum::Periodic, 5),
