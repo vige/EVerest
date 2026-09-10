@@ -75,6 +75,18 @@ std::string ConfigAccess::getTelemetryMappingPath() const {
     return m_config.TelemetryMappingPath;
 }
 
+std::string ConfigAccess::getTelemetryOtlpBindAddress() const {
+    return m_config.TelemetryOtlpBindAddress;
+}
+
+int ConfigAccess::getTelemetryOtlpPort() const {
+    return m_config.TelemetryOtlpPort;
+}
+
+int ConfigAccess::getTelemetryOtlpMaxBodyBytes() const {
+    return m_config.TelemetryOtlpMaxBodyBytes;
+}
+
 OCPPmulti::~OCPPmulti() {
     m_ocpp.shutdown();
     m_charge_point.shutdown();

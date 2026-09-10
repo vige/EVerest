@@ -583,15 +583,24 @@ void MonitoringUpdater::process_monitor_meta_internal(UpdaterMonitorMeta& update
         }
 
         if (matches_time) {
-            RequiredComponentVariable comp_var;
+            ComponentVariable comp_var;
             comp_var.component = updater_meta_data.component;
             comp_var.variable = updater_meta_data.variable;
 
             // This operation can cause a small stall, but only if this is triggered
-            const auto current_value = this->device_model.get_value<std::string>(comp_var);
+            //
+            // A variable can be monitored before it has a value: a measurement the station has not
+            // taken yet reports nothing, and a monitor set on it in an earlier session is loaded at
+            // boot regardless. Reporting a value that was never measured would be a lie the CSMS
+            // cannot detect, and the required-value read throws, which used to take the module down
+            // on the first tick. Skip the period instead and report the next one that has a value.
+            const auto current_value = this->device_model.get_optional_value<std::string>(comp_var);
+            if (not current_value.has_value()) {
+                return;
+            }
 
             EventData notify_event =
-                std::move(create_notify_event(this->unique_id++, current_value, updater_meta_data.component,
+                std::move(create_notify_event(this->unique_id++, *current_value, updater_meta_data.component,
                                               updater_meta_data.variable, monitor_meta));
 
             // Generate one event that will either be sent now, or later based on the offline state

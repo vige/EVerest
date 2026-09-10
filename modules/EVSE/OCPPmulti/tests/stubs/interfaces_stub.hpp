@@ -302,7 +302,6 @@ public:
     std::vector<std::unique_ptr<reservationIntf>> r_reservation;
     evse_securityIntf r_security{&m_adapter, m_requirement, "security", std::nullopt};
     systemIntf r_system{&m_adapter, m_requirement, "system", std::nullopt};
-    std::vector<std::unique_ptr<telemetryIntf>> r_telemetry;
 
     const provides_t& get_provides() const {
         return m_provides;
@@ -424,7 +423,7 @@ private:
     provides_t m_provides{p_auth_validator, p_auth_provider, p_data_transfer, p_ocpp_generic, p_session_cost};
     requires_t m_requires{r_auth,         r_charger_information, r_data_transfer, r_display_message, r_evse_energy_sink,
                           r_evse_manager, r_extensions_15118,    r_grid_support,  r_reservation,     r_security,
-                          r_telemetry,    r_system};
+                          r_system};
 };
 
 } // namespace stubs

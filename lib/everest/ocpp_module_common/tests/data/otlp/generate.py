@@ -84,3 +84,7 @@ write('shadowed_attribute.bin', data(
 
 # an empty export: a producer with nothing to report
 write('empty.bin', MetricsData(resource_metrics=[]))
+
+# hand_built.bin is not generated here: it is the payload the shell producer in
+# config/telemetry-producer-example.sh sends, byte for byte, kept as a fixture so a change to the
+# decoder cannot quietly break the one producer that has no dependencies at all.

@@ -138,6 +138,23 @@ TEST(OtlpMetricsDecode, AnEmptyBodyIsAValidExportOfNothing) {
     EXPECT_EQ(decoded->skipped_points, 0);
 }
 
+TEST(OtlpMetricsDecode, ReadsAPayloadAssembledByHand) {
+    // the bytes the shell producer sends: no SDK, no protobuf library, just curl. If this breaks,
+    // the simplest way to put a value on the station has broken with it.
+    const auto decoded = decode_export_metrics_request(fixture("hand_built.bin"));
+    ASSERT_TRUE(decoded.has_value());
+    ASSERT_EQ(decoded->samples.size(), 1);
+
+    const auto& sample = decoded->samples.front();
+    EXPECT_EQ(sample.metric, "system.memory.usage");
+    EXPECT_EQ(sample.unit, "By");
+    EXPECT_TRUE(sample.is_integer);
+    EXPECT_EQ(sample.as_int, 67);
+    EXPECT_EQ(sample.attributes.at("state"), "used");
+    EXPECT_EQ(sample.attributes.at("service.name"), "my-service");
+    EXPECT_EQ(sample.time_unix_nano, 1700000000000000000ULL);
+}
+
 TEST(OtlpMetricsDecode, RejectsATruncatedBody) {
     const auto whole = fixture("mixed.bin");
     ASSERT_GT(whole.size(), 20);

@@ -21,7 +21,6 @@ target_link_libraries(${MODULE_NAME}
         everest::ocpp_conversions
         everest::ocpp_module_common
         everest::external_energy_limits
-        everest::telemetry
 )
 
 target_compile_options(${MODULE_NAME}

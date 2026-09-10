@@ -1,8 +1,12 @@
 # SIL for the telemetry feature, wired all the way through to a CSMS.
 #
 # The charging stack is the stock two-EVSE AC simulation of config-sil-ocpp201.yaml. On top of it
-# TelemetryProducerExample publishes its two sets, TelemetryConsumerExample logs them, and OCPP201
-# consumes the entries named in the mapping file and serves them as device model variables.
+# OCPPmulti listens for OTLP on port 4318 and serves the metrics named in the mapping file as
+# device model variables. Producers are ordinary OpenTelemetry clients and are not EVerest modules:
+# config/telemetry-producer-example.py and .sh are two of them.
+#
+# The receiver binds 0.0.0.0 here because the producers run on the host, outside the devcontainer.
+# On a station it binds loopback.
 #
 # The device model uses the component config the module ships, so a CSMS connection is whatever the
 # stock NetworkConnectionProfiles say: point slot 1 at a local CSMS, or set the profile over OCPP.
@@ -145,12 +149,9 @@ active_modules:
       CoreDatabasePath: /tmp/telemetry-ocpp201
       MessageLogPath: /tmp/telemetry-ocpp201/logs
       TelemetryMappingPath: /workspace/config/telemetry-mappings.yaml
+      TelemetryOtlpBindAddress: "0.0.0.0"
+      TelemetryOtlpPort: 4318
     connections:
-      telemetry:
-        - module_id: telemetry_producer
-          implementation_id: livedata
-        - module_id: telemetry_producer
-          implementation_id: diagnostics
       evse_manager:
         - module_id: evse_manager_1
           implementation_id: evse
@@ -328,25 +329,3 @@ active_modules:
         database_path: /tmp/error_history.db
   system:
     module: System
-  telemetry_producer:
-    module: TelemetryProducerExample
-    mapping:
-      module:
-        evse: 1
-    config_module:
-      publish_interval_ms: 500
-      live_only: false
-  telemetry_consumer:
-    module: TelemetryConsumerExample
-    config_module:
-      filter_module_id: ""
-      filter_module_type: ""
-      filter_set: ""
-      filter_entries: ""
-      print_definitions: true
-    connections:
-      telemetry:
-        - module_id: telemetry_producer
-          implementation_id: livedata
-        - module_id: telemetry_producer
-          implementation_id: diagnostics

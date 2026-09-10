@@ -24,10 +24,11 @@
 #include <generated/interfaces/reservation/Interface.hpp>
 #include <generated/interfaces/session_cost/Implementation.hpp>
 #include <generated/interfaces/system/Interface.hpp>
-#include <generated/interfaces/telemetry/Interface.hpp>
 
 #include <everest/ocpp_module_common/device_model/telemetry_device_model_storage.hpp>
-#include <everest/telemetry/sink.hpp>
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+#include <everest/ocpp_module_common/otlp/http_server.hpp>
+#endif
 
 #include <ocpp/v2/messages/BootNotification.hpp>
 #include <ocpp/v2/messages/ClearDisplayMessage.hpp>
@@ -87,7 +88,6 @@ struct GenericOcppInterface {
         const std::vector<std::unique_ptr<grid_supportIntf>>& grid_support;
         const std::vector<std::unique_ptr<reservationIntf>>& reservation;
         evse_securityIntf& security;
-        const std::vector<std::unique_ptr<telemetryIntf>>& telemetry;
         systemIntf& system;
     };
 
@@ -140,6 +140,9 @@ struct ConfigInterface {
     [[nodiscard]] virtual int getResetStopDelay() const = 0;
     [[nodiscard]] virtual std::string getUserConfigPath() const = 0;
     [[nodiscard]] virtual std::string getTelemetryMappingPath() const = 0;
+    [[nodiscard]] virtual std::string getTelemetryOtlpBindAddress() const = 0;
+    [[nodiscard]] virtual int getTelemetryOtlpPort() const = 0;
+    [[nodiscard]] virtual int getTelemetryOtlpMaxBodyBytes() const = 0;
 };
 
 class GenericOcpp : public GenericOcppInterface, public GenericChargePointCallbacks {
@@ -196,17 +199,19 @@ private:
     // these need to be thread safe - used by libocpp and this object
     std::shared_ptr<module::device_model::EverestDeviceModelStorage> m_everest_device_model_storage;
 
-    /// \brief Consumer of the telemetry sets this module is wired to, and the device model storage
-    /// that serves the mapped ones to the CSMS.
+    /// \brief The OTLP receiver, and the device model storage that serves what it receives.
     ///
     /// Both are built in ready(), before the charge point: libocpp snapshots the device model
     /// structure once at construction, so a component that is not declared by then is not there at
-    /// all. The sink is subscribed before interest is declared, or the snapshot a producer sends in
-    /// answer to the interest change is lost.
-    std::unique_ptr<Everest::telemetry::Sink> m_telemetry_sink;
+    /// all. The storage is built from the mapping file alone and is complete before anything has
+    /// been measured, so the receiver may start after it without a gap.
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+    std::unique_ptr<ocpp_module_common::otlp::HttpServer> m_telemetry_receiver;
+#endif
     std::shared_ptr<module::device_model::TelemetryDeviceModelStorage> m_telemetry_device_model_storage;
 
-    /// \brief Builds m_telemetry_device_model_storage from the mapping file, or leaves it null.
+    /// \brief Builds m_telemetry_device_model_storage from the mapping file, or leaves it null,
+    /// and starts the receiver that feeds it.
     void init_telemetry();
 
     // needs to be thread safe - used by v2_chargepoint and this object

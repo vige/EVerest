@@ -1,13 +1,17 @@
-# Which telemetry entries this station exposes to the CSMS as device model variables.
+# Which OpenTelemetry metrics this station exposes to the CSMS as device model variables.
 #
-# Curated on purpose. A telemetry set is free to grow an entry whenever a driver has something new to
-# report; the CSMS-facing device model is a contract with the operator and changes only when someone
-# adds a line here. Nothing in this file describes a value: the data type, unit and bounds of each
-# variable come from the entry declaration in the publishing module's manifest, so a mapping cannot
-# say a temperature is a boolean or that it is measured in volts.
+# Curated on purpose. Anything that can reach the OTLP endpoint may publish a metric; the
+# CSMS-facing device model is a contract with the operator and changes only when someone adds a
+# line here. A metric nobody names below is decoded, found to match nothing, and dropped.
 #
-# The OCPP side names the component and variable. The EVerest side names the publishing module
-# instance as config.yaml spells it, the telemetry set (the implementation id) and the entry.
+# The characteristics live here rather than with the producer because OTLP has nowhere to put them:
+# a metric carries a name, a unit and attributes, and no bounds, no enumeration and no data type.
+# That also makes the device model complete at start-up, before any producer has said anything --
+# a GetBaseReport at boot lists every variable below, reading as absent until a value arrives.
+#
+# `attributes` selects among the data points of one metric. Every attribute named must be present
+# and equal; anything else on the point is ignored. Values compare as text, so `evse: 1` matches an
+# attribute sent as the integer 1.
 telemetry_mappings:
   - ocpp:
       component:
@@ -15,21 +19,10 @@ telemetry_mappings:
         evse: { id: 1 }
       variable:
         name: MeterTemperature
-    everest:
-      module_id: telemetry_producer
-      telemetry_set: livedata
-      entry: temperature_C
-
-  - ocpp:
-      component:
-        name: PowerMeterDC
-        evse: { id: 1 }
-      variable:
-        name: Frequency
-    everest:
-      module_id: telemetry_producer
-      telemetry_set: livedata
-      entry: frequency_Hz
+      characteristics: { dataType: decimal, unit: Celsius, min: -40, max: 120 }
+    otel:
+      metric: powermeter.temperature
+      attributes: { evse: 1 }
 
   - ocpp:
       component:
@@ -37,44 +30,52 @@ telemetry_mappings:
         evse: { id: 1 }
       variable:
         name: Current
-    everest:
-      module_id: telemetry_producer
-      telemetry_set: livedata
-      entry: current_A
+      characteristics: { dataType: decimal, unit: A, min: 0, max: 500 }
+    otel:
+      metric: powermeter.current
+      attributes: { evse: 1 }
 
   - ocpp:
       component:
         name: PowerMeterDC
         evse: { id: 1 }
       variable:
-        name: FirmwareState
-    everest:
-      module_id: telemetry_producer
-      telemetry_set: livedata
-      entry: fw_state
+        name: Frequency
+      characteristics: { dataType: decimal, unit: Hz, min: 45, max: 55 }
+    otel:
+      metric: powermeter.frequency
+      attributes: { evse: 1 }
 
-  # The diagnostics set is capped at 0.2 Hz, so these move at most once every five seconds.
+  # The same metric name, a different data point. One selector per EVSE, one variable per EVSE.
   - ocpp:
       component:
         name: PowerMeterDC
-        evse: { id: 1 }
+        evse: { id: 2 }
       variable:
-        name: Uptime
-    everest:
-      module_id: telemetry_producer
-      telemetry_set: diagnostics
-      entry: uptime_s
+        name: MeterTemperature
+      characteristics: { dataType: decimal, unit: Celsius, min: -40, max: 120 }
+    otel:
+      metric: powermeter.temperature
+      attributes: { evse: 2 }
+
+  # Nothing in EVerest publishes these. They come from whatever on the station is in a position to
+  # know -- a shell script, a modem daemon -- and reach the CSMS by being named here and nowhere
+  # else. This is the case the telemetry interface could not serve without a module per source.
+  - ocpp:
+      component:
+        name: Controller
+      variable:
+        name: CPUUtilization
+      characteristics: { dataType: decimal, unit: Percent, min: 0, max: 100 }
+    otel:
+      metric: system.cpu.utilization
 
   - ocpp:
       component:
-        name: PowerMeterDC
-        evse: { id: 1 }
+        name: Controller
       variable:
-        name: SerialNumber
-    everest:
-      module_id: telemetry_producer
-      telemetry_set: diagnostics
-      entry: serial
-
-# error_count is published by the diagnostics set and deliberately not mapped: it is the entry that
-# shows curation working, because it never reaches the CSMS and is never even published.
+        name: MemoryUsed
+      characteristics: { dataType: integer, unit: By, min: 0 }
+    otel:
+      metric: system.memory.usage
+      attributes: { state: used }

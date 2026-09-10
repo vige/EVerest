@@ -10,12 +10,12 @@
 #include <string>
 #include <vector>
 
-#include <generated/types/telemetry.hpp>
 #include <ocpp/v2/device_model_storage_interface.hpp>
 #include <ocpp/v2/device_model_storage_sqlite.hpp>
 #include <ocpp/v2/init_device_model_db.hpp>
 
 #include <everest/ocpp_module_common/device_model/telemetry_mapping.hpp>
+#include <everest/ocpp_module_common/otlp/metrics_decode.hpp>
 
 namespace ocpp_module_common::device_model {
 
@@ -49,11 +49,9 @@ inline constexpr auto VARIABLE_SOURCE_TELEMETRY = "TELEMETRY";
 /// be the caller. A read here takes this class's own mutex and does a map lookup, and nothing else.
 class TelemetryDeviceModelStorage : public ocpp::v2::DeviceModelStorageInterface {
 public:
-    /// \brief Builds the device model of \p mappings, keeping those whose set declares the entry.
-    /// \param mappings the validated mapping list
-    /// \param definitions the set definitions the sink resolved, keyed by flow
-    TelemetryDeviceModelStorage(const std::vector<TelemetryMapping>& mappings,
-                                const std::map<Everest::telemetry::SetKey, types::telemetry::SetDefinition>& definitions);
+    /// \brief Builds the device model \p mappings describes.
+    /// \param mappings the validated mapping list, which carries the characteristics too
+    explicit TelemetryDeviceModelStorage(const std::vector<TelemetryMapping>& mappings);
 
     /// \brief These variables as a component config, for seeding the device model database.
     ///
@@ -68,15 +66,17 @@ public:
     void set_monitor_store(std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> store);
     virtual ~TelemetryDeviceModelStorage() override = default;
 
-    /// \brief Records the values of \p update that some mapping reads from. Called from the sink.
-    /// \returns the number of device model variables the update changed
-    std::size_t on_update(const types::telemetry::Update& update);
+    /// \brief Records the samples of \p exported that some mapping selects. Called from the
+    /// receiver, on its service thread.
+    ///
+    /// A sample nothing maps is dropped here rather than kept against a mapping that might appear
+    /// later: the mapping file is read once at start-up, so a metric nobody named is a metric this
+    /// station has no use for.
+    /// \returns the number of device model variables the export changed
+    std::size_t on_export(const otlp::Export& exported);
 
     /// \brief The mappings this storage kept, in target order. For logs and introspection.
     const std::map<ocpp::v2::ComponentVariable, TelemetryMapping>& mappings() const;
-
-    /// \brief The mappings dropped because the set does not declare the entry, with the reason.
-    const std::vector<std::string>& unavailable() const;
 
     virtual ocpp::v2::DeviceModelMap get_device_model() override;
     virtual std::optional<ocpp::v2::VariableAttribute>
@@ -101,19 +101,15 @@ public:
     virtual void check_integrity() override;
 
 private:
-    /// \returns the string form of the value of \p mapping, or nothing when it has not arrived yet
-    std::optional<std::string> read(const TelemetryMapping& mapping) const;
-
+    /// \returns the string form of the value of \p target, or nothing when it has not arrived yet
+    std::optional<std::string> read(const ocpp::v2::ComponentVariable& target) const;
 
     std::map<ocpp::v2::ComponentVariable, TelemetryMapping> table;
-    /// target -> the entry type its set declared, which is how a value is rendered
-    std::map<ocpp::v2::ComponentVariable, types::telemetry::EntryType> entry_types;
     ocpp::v2::DeviceModelMap model;
-    std::vector<std::string> dropped;
 
     mutable std::mutex mutex;
-    /// flow -> entry -> last value seen, as the string the device model reports
-    std::map<Everest::telemetry::SetKey, std::map<std::string, std::string>> values;
+    /// target -> last value seen, as the string the device model reports
+    std::map<ocpp::v2::ComponentVariable, std::string> values;
 
     /// The storage owning the database these variables were seeded into. Null until set.
     std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> monitor_store;
@@ -134,10 +130,10 @@ make_ocpp_device_model_storage(const std::filesystem::path& database_path,
                                const std::filesystem::path& config_path,
                                const std::shared_ptr<TelemetryDeviceModelStorage>& telemetry);
 
-/// \returns the string form of the JSON scalar \p value as the device model reports it
+/// \returns \p sample rendered as the device model reports it, for a variable of \p type
 ///
 /// Exposed for the unit tests: the rendering of a number is the difference between a CSMS seeing
-/// 40.5 and seeing 40.500000, and between an integer entry arriving as 7 and as 7.0.
-std::string render_value(const nlohmann::json& value, types::telemetry::EntryType type);
+/// 40.5 and seeing 40.500000, and between an integer variable arriving as 7 and as 7.0.
+std::string render_value(const otlp::Sample& sample, ocpp::v2::DataEnum type);
 
 } // namespace ocpp_module_common::device_model

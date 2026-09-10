@@ -182,10 +182,26 @@ config:
   TelemetryMappingPath:
     description: >-
       OCPP 2.x
-      Path to the YAML file that maps telemetry entries onto device model variables. Empty means no
-      telemetry is exposed to the CSMS, whatever the module is wired to.
+      Path to the YAML file that maps OpenTelemetry metrics onto device model variables. Empty
+      means no telemetry is exposed to the CSMS, and the OTLP receiver is not started.
     type: string
     default: ""
+  TelemetryOtlpBindAddress:
+    description: >-
+      Interface the OTLP receiver listens on. Loopback by default: anything that can reach this
+      endpoint can set a value the mapping turns into a CSMS-visible device model variable.
+    type: string
+    default: "127.0.0.1"
+  TelemetryOtlpPort:
+    description: Port the OTLP receiver listens on, serving POST /v1/metrics.
+    type: integer
+    default: 4318
+  TelemetryOtlpMaxBodyBytes:
+    description: >-
+      Largest OTLP request accepted. A collector batching several producers sends more than a
+      single driver does; anything above this is answered with 413.
+    type: integer
+    default: 1048576
 provides:
   auth_validator:
     description: Validates the provided token using CSMS, AuthorizationList or AuthorizationCache
@@ -243,10 +259,6 @@ requires:
     interface: evse_security
     min_connections: 1
     max_connections: 1
-  telemetry:
-    interface: telemetry
-    min_connections: 0
-    max_connections: 128
   system:
     interface: system
     min_connections: 1

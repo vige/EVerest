@@ -22,6 +22,19 @@ target_sources(ocpp_module_common
         src/otlp/metrics_decode.cpp
 )
 
+# The OTLP receiver: an HTTP endpoint a producer posts metrics to. Off by default, because it
+# opens a listening socket and most stations have nothing to send to it.
+option(EVEREST_ENABLE_OTLP_TELEMETRY "Receive telemetry as OTLP over HTTP in the OCPP modules" OFF)
+
+if(EVEREST_ENABLE_OTLP_TELEMETRY)
+    if(DISABLE_EDM)
+        find_package(libwebsockets REQUIRED)
+    endif()
+    target_sources(ocpp_module_common PRIVATE src/otlp/http_server.cpp)
+    target_compile_definitions(ocpp_module_common PUBLIC EVEREST_ENABLE_OTLP_TELEMETRY)
+    target_link_libraries(ocpp_module_common PRIVATE websockets_shared)
+endif()
+
 target_include_directories(ocpp_module_common
     PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

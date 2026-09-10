@@ -30,6 +30,9 @@ struct ConfigStub : public ocpp_multi::ConfigInterface {
     int ResetStopDelay{0};
     std::string UserConfigPath{"user_config"};
     std::string TelemetryMappingPath{};
+    std::string TelemetryOtlpBindAddress{"127.0.0.1"};
+    int TelemetryOtlpPort{4318};
+    int TelemetryOtlpMaxBodyBytes{1048576};
 
     [[nodiscard]] std::string getChargePointConfigPath() const override {
         return ChargePointConfigPath;
@@ -96,6 +99,15 @@ struct ConfigStub : public ocpp_multi::ConfigInterface {
     }
     [[nodiscard]] std::string getTelemetryMappingPath() const override {
         return TelemetryMappingPath;
+    }
+    [[nodiscard]] std::string getTelemetryOtlpBindAddress() const override {
+        return TelemetryOtlpBindAddress;
+    }
+    [[nodiscard]] int getTelemetryOtlpPort() const override {
+        return TelemetryOtlpPort;
+    }
+    [[nodiscard]] int getTelemetryOtlpMaxBodyBytes() const override {
+        return TelemetryOtlpMaxBodyBytes;
     }
 };
 

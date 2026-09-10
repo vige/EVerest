@@ -1858,20 +1858,7 @@ void GenericOcpp::charging_schedules_timer_stop() {
 }
 
 void GenericOcpp::init_telemetry() {
-    if (mv_requires.telemetry.empty()) {
-        return;
-    }
-
-    // Subscribe first, always: a producer answers an interest change with a snapshot of the entries
-    // just asked for, and that snapshot is the only chance to see an entry that never changes again.
-    m_telemetry_sink = std::make_unique<Everest::telemetry::Sink>(mv_requires.telemetry, mv_info.id);
-    m_telemetry_sink->subscribe([this](const types::telemetry::Update& update) {
-        const auto storage = m_telemetry_device_model_storage;
-        if (storage != nullptr) {
-            storage->on_update(update);
-        }
-    });
-
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
     const auto mapping_path = mv_config.getTelemetryMappingPath();
     if (mapping_path.empty()) {
         EVLOG_info << "telemetry: no mapping file configured; nothing is exposed to the CSMS";
@@ -1889,31 +1876,35 @@ void GenericOcpp::init_telemetry() {
         return;
     }
 
-    // The definitions come from the producers, so the data type, unit and bounds of a device model
-    // variable are the ones the publishing module declared in its manifest.
-    m_telemetry_sink->resolve_definitions();
-    auto storage = std::make_shared<module::device_model::TelemetryDeviceModelStorage>(
-        load.mappings, m_telemetry_sink->definitions());
-    for (const auto& unavailable : storage->unavailable()) {
-        EVLOG_info << "telemetry: " << unavailable;
-    }
-    if (storage->mappings().empty()) {
-        EVLOG_warning << "telemetry: none of the " << load.mappings.size()
-                      << " mapped entries is servable here; nothing is exposed to the CSMS";
-        return;
-    }
-
-    // Curation cuts both ways: the CSMS sees only what the mapping names, and the producers are
-    // asked for only what the mapping names, so an unmapped entry is never even published.
-    std::map<Everest::telemetry::SetKey, std::vector<std::string>> interest;
+    // The mapping file describes the variables completely, so the device model is whole here,
+    // before a producer has said anything. A CSMS reading a base report at boot sees every mapped
+    // variable, with no value rather than with one the station never measured.
+    auto storage = std::make_shared<module::device_model::TelemetryDeviceModelStorage>(load.mappings);
     for (const auto& [target, mapping] : storage->mappings()) {
-        interest[mapping.flow].push_back(mapping.entry);
         EVLOG_info << "telemetry: serving " << mapping.to_string();
     }
     m_telemetry_device_model_storage = storage;
-    const auto flows = m_telemetry_sink->declare_interest(interest);
-    EVLOG_info << "telemetry: " << storage->mappings().size() << " device model variables from " << flows
-               << " telemetry set(s)";
+
+    // The receiver holds a shared_ptr rather than the raw storage: it is stopped in shutdown()
+    // before this object dies, but a request already inside the handler must not find it gone.
+    m_telemetry_receiver = std::make_unique<ocpp_module_common::otlp::HttpServer>(
+        mv_config.getTelemetryOtlpBindAddress(), mv_config.getTelemetryOtlpPort(),
+        static_cast<std::size_t>(mv_config.getTelemetryOtlpMaxBodyBytes()),
+        [storage](const ocpp_module_common::otlp::Export& exported) { storage->on_export(exported); });
+
+    if (not m_telemetry_receiver->start()) {
+        // Not fatal: a station that cannot receive telemetry still charges cars, and the variables
+        // stay in the device model reading as absent, which is the truth.
+        EVLOG_error << "telemetry: the OTLP receiver did not start; mapped variables will read as absent";
+        m_telemetry_receiver.reset();
+        return;
+    }
+
+    EVLOG_info << "telemetry: " << storage->mappings().size() << " device model variable(s) from OTLP on "
+               << mv_config.getTelemetryOtlpBindAddress() << ":" << mv_config.getTelemetryOtlpPort();
+#else
+    EVLOG_debug << "telemetry: built without EVEREST_ENABLE_OTLP_TELEMETRY";
+#endif
 }
 
 void GenericOcpp::shutdown() {
@@ -1928,11 +1919,13 @@ void GenericOcpp::shutdown() {
     // Unblock any ConnectivityManager thread waiting on a pending configure_network future.
     drain_pending_network_config_requests();
 
-    // Stop the producers. Publishing to a subscriber that is going away costs the broker and the
-    // producer's rate budget for nothing.
-    if (m_telemetry_sink != nullptr) {
-        m_telemetry_sink->withdraw();
+    // Stop receiving before the storage the handler writes into goes away. The server joins its
+    // service thread, so no handler is running once this returns.
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+    if (m_telemetry_receiver != nullptr) {
+        m_telemetry_receiver->stop();
     }
+#endif
 }
 
 bool GenericOcpp::ocpp_2_selected() const {
