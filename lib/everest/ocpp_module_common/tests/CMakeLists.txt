@@ -13,6 +13,7 @@ target_sources(${TEST_TARGET_NAME}
     everest_device_model_storage_test.cpp
     grid_support_conversions_test.cpp
     network_conversions_test.cpp
+    otlp_metrics_decode_test.cpp
     telemetry_device_model_storage_test.cpp
     transaction_handler_tests.cpp
 )

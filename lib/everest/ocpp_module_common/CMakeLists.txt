@@ -19,6 +19,7 @@ target_sources(ocpp_module_common
         src/device_model/everest_device_model_storage.cpp
         src/device_model/telemetry_device_model_storage.cpp
         src/device_model/telemetry_mapping.cpp
+        src/otlp/metrics_decode.cpp
 )
 
 target_include_directories(ocpp_module_common
