@@ -477,6 +477,68 @@ void OCPP201::init() {
     }
 
     this->init_evse_subscriptions();
+
+    if (not this->r_telemetry.empty()) {
+        // Subscribing here and declaring interest in ready() is the order the sink asks for: a
+        // producer answers an interest change with a snapshot of the entries just asked for, and
+        // that snapshot is the only chance to see an entry that never changes again.
+        this->telemetry_sink = std::make_unique<Everest::telemetry::Sink>(this->r_telemetry, this->info.id);
+        this->telemetry_sink->subscribe([this](const types::telemetry::Update& update) {
+            const auto storage = this->telemetry_device_model_storage;
+            if (storage != nullptr) {
+                storage->on_update(update);
+            }
+        });
+    }
+}
+
+std::shared_ptr<telemetry_dm::TelemetryDeviceModelStorage> OCPP201::make_telemetry_device_model_storage() {
+    if (this->config.TelemetryMappingPath.empty()) {
+        return nullptr;
+    }
+    if (this->telemetry_sink == nullptr) {
+        EVLOG_warning << "telemetry: a mapping file is configured but no telemetry set is wired to this module; "
+                         "no telemetry will be exposed to the CSMS";
+        return nullptr;
+    }
+
+    const auto load = telemetry_dm::load_telemetry_mappings(fs::path(this->config.TelemetryMappingPath));
+    for (const auto& error : load.errors) {
+        EVLOG_error << "telemetry: " << error;
+    }
+    for (const auto& rejected : load.rejected) {
+        EVLOG_warning << "telemetry: " << rejected;
+    }
+    if (load.mappings.empty()) {
+        return nullptr;
+    }
+
+    // The definitions come from the producers themselves, so the type, unit and bounds of a device
+    // model variable are the ones the publishing module declared in its manifest.
+    this->telemetry_sink->resolve_definitions();
+    auto storage = std::make_shared<telemetry_dm::TelemetryDeviceModelStorage>(load.mappings,
+                                                                              this->telemetry_sink->definitions());
+    for (const auto& unavailable : storage->unavailable()) {
+        EVLOG_info << "telemetry: " << unavailable;
+    }
+    if (storage->mappings().empty()) {
+        EVLOG_warning << "telemetry: none of the " << load.mappings.size()
+                      << " mapped entries is servable here; no telemetry will be exposed to the CSMS";
+        return nullptr;
+    }
+
+    // Curation cuts both ways: the CSMS sees only what the mapping names, and the producers are
+    // asked for only what the mapping names, so an unmapped entry is never even published.
+    std::map<Everest::telemetry::SetKey, std::vector<std::string>> interest;
+    for (const auto& [target, mapping] : storage->mappings()) {
+        interest[mapping.flow].push_back(mapping.entry);
+        EVLOG_info << "telemetry: serving " << mapping.to_string();
+    }
+    this->telemetry_device_model_storage = storage;
+    const auto flows = this->telemetry_sink->declare_interest(interest);
+    EVLOG_info << "telemetry: " << storage->mappings().size() << " device model variables from " << flows
+               << " telemetry set(s)";
+    return storage;
 }
 
 void OCPP201::ready() {
@@ -1026,6 +1088,13 @@ void OCPP201::ready() {
     // register both device model storages
     composed_device_model_storage->register_device_model_storage("OCPP", std::move(libocpp_device_model_storage));
     composed_device_model_storage->register_device_model_storage("EVEREST", this->everest_device_model_storage);
+
+    // Registration snapshots get_device_model(), so this has to happen before the ChargePoint is
+    // constructed; libocpp reads the structure once and never asks again.
+    if (const auto telemetry_storage = this->make_telemetry_device_model_storage(); telemetry_storage != nullptr) {
+        composed_device_model_storage->register_device_model_storage(telemetry_dm::VARIABLE_SOURCE_TELEMETRY,
+                                                                     telemetry_storage);
+    }
 
     this->charge_point = std::make_unique<ocpp::v2::ChargePoint>(
         evse_connector_structure, std::move(composed_device_model_storage), this->ocpp_share_path.string(),
@@ -1893,6 +1962,14 @@ void OCPP201::set_external_limits(const std::vector<ocpp::v2::EnhancedCompositeS
 
         auto& evse_sink = external_energy_limits::get_evse_sink_by_evse_id(this->r_evse_energy_sink, evse_id);
         evse_sink.call_set_external_limits(limits);
+    }
+}
+
+void OCPP201::shutdown() {
+    // Stop the producers before the module goes away: publishing to a subscriber that is gone costs
+    // the broker and the producer's rate budget for nothing.
+    if (this->telemetry_sink != nullptr) {
+        this->telemetry_sink->withdraw();
     }
 }
 

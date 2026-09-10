@@ -5,7 +5,7 @@
 
 //
 // AUTO GENERATED - MARKED REGIONS WILL BE KEPT
-// template version 2
+// template version 3
 //
 
 #include "ld-ev.hpp"
@@ -27,6 +27,7 @@
 #include <generated/interfaces/ocpp_data_transfer/Interface.hpp>
 #include <generated/interfaces/reservation/Interface.hpp>
 #include <generated/interfaces/system/Interface.hpp>
+#include <generated/interfaces/telemetry/Interface.hpp>
 
 // ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
 // insert your custom include headers here
@@ -46,12 +47,10 @@ using EventQueue =
     std::map<int32_t,
              std::queue<std::variant<types::evse_manager::SessionEvent, Everest::error::Error, ocpp::v2::MeterValue,
                                      types::system::FirmwareUpdateStatus, types::system::LogStatus>>>;
-// ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
-
+// Shared OCPP module support code lives in lib/everest/ocpp_module_common; pull the names into the
+// module namespace to keep call sites unchanged. Inside the marked region because ev-cli rewrites
+// everything outside it.
 namespace module {
-
-// Shared OCPP module support code lives in lib/everest/ocpp_module_common;
-// pull the names into the module namespace to keep call sites unchanged.
 namespace conversions = ocpp_module_common::conversions;
 namespace device_model = ocpp_module_common::device_model;
 using ocpp_module_common::CHARGING_STATION_COMPONENT_NAME;
@@ -69,6 +68,12 @@ using ocpp_module_common::TransactionHandler;
 using ocpp_module_common::TxEvent;
 using ocpp_module_common::TxEventEffect;
 using ocpp_module_common::TxStartStopPoint;
+} // namespace module
+
+#include "device_model/telemetry_device_model_storage.hpp"
+// ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
+
+namespace module {
 
 struct Conf {
     std::string MessageLogPath;
@@ -84,6 +89,7 @@ struct Conf {
     std::string RequestCompositeScheduleUnit;
     int DelayOcppStart;
     int ResetStopDelay;
+    std::string TelemetryMappingPath;
     std::string CustomMrecErrorMapPath;
 };
 
@@ -101,7 +107,8 @@ public:
             std::vector<std::unique_ptr<external_energy_limitsIntf>> r_evse_energy_sink,
             std::vector<std::unique_ptr<display_messageIntf>> r_display_message,
             std::vector<std::unique_ptr<reservationIntf>> r_reservation,
-            std::vector<std::unique_ptr<iso15118_extensionsIntf>> r_extensions_15118, Conf& config) :
+            std::vector<std::unique_ptr<iso15118_extensionsIntf>> r_extensions_15118,
+            std::vector<std::unique_ptr<telemetryIntf>> r_telemetry, Conf& config) :
         ModuleBase(info),
         mqtt(mqtt_provider),
         p_auth_validator(std::move(p_auth_validator)),
@@ -118,6 +125,7 @@ public:
         r_display_message(std::move(r_display_message)),
         r_reservation(std::move(r_reservation)),
         r_extensions_15118(std::move(r_extensions_15118)),
+        r_telemetry(std::move(r_telemetry)),
         config(config){};
 
     Everest::MqttProvider& mqtt;
@@ -135,6 +143,7 @@ public:
     const std::vector<std::unique_ptr<display_messageIntf>> r_display_message;
     const std::vector<std::unique_ptr<reservationIntf>> r_reservation;
     const std::vector<std::unique_ptr<iso15118_extensionsIntf>> r_extensions_15118;
+    const std::vector<std::unique_ptr<telemetryIntf>> r_telemetry;
     const Conf& config;
 
     // ev@1fce4c5e-0ab8-41bb-90f7-14277703d2ac:v1
@@ -154,9 +163,21 @@ private:
     friend class LdEverest;
     void init();
     void ready();
+    void shutdown();
 
     // ev@211cfdbe-f69a-4cd6-a4ec-f8aaa3d1b6c8:v1
     // insert your private definitions here
+
+    /// \brief Builds the telemetry-backed device model storage and opens the valve at the producers.
+    ///
+    /// Called from ready() before the ChargePoint is constructed, because libocpp snapshots the
+    /// device model structure once at construction: a component that is not there by then is not
+    /// there at all.
+    /// \returns the storage, or nullptr when no telemetry is configured or none of it is servable
+    std::shared_ptr<telemetry_dm::TelemetryDeviceModelStorage> make_telemetry_device_model_storage();
+
+    std::unique_ptr<Everest::telemetry::Sink> telemetry_sink;
+    std::shared_ptr<telemetry_dm::TelemetryDeviceModelStorage> telemetry_device_model_storage;
     std::shared_ptr<device_model::EverestDeviceModelStorage> everest_device_model_storage;
     std::unique_ptr<TransactionHandler> transaction_handler;
     Everest::SteadyTimer charging_schedules_timer;

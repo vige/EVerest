@@ -1,0 +1,80 @@
+# Which telemetry entries this station exposes to the CSMS as device model variables.
+#
+# Curated on purpose. A telemetry set is free to grow an entry whenever a driver has something new to
+# report; the CSMS-facing device model is a contract with the operator and changes only when someone
+# adds a line here. Nothing in this file describes a value: the data type, unit and bounds of each
+# variable come from the entry declaration in the publishing module's manifest, so a mapping cannot
+# say a temperature is a boolean or that it is measured in volts.
+#
+# The OCPP side names the component and variable. The EVerest side names the publishing module
+# instance as config.yaml spells it, the telemetry set (the implementation id) and the entry.
+telemetry_mappings:
+  - ocpp:
+      component:
+        name: PowerMeterDC
+        evse: { id: 1 }
+      variable:
+        name: MeterTemperature
+    everest:
+      module_id: telemetry_producer
+      telemetry_set: livedata
+      entry: temperature_C
+
+  - ocpp:
+      component:
+        name: PowerMeterDC
+        evse: { id: 1 }
+      variable:
+        name: Frequency
+    everest:
+      module_id: telemetry_producer
+      telemetry_set: livedata
+      entry: frequency_Hz
+
+  - ocpp:
+      component:
+        name: PowerMeterDC
+        evse: { id: 1 }
+      variable:
+        name: Current
+    everest:
+      module_id: telemetry_producer
+      telemetry_set: livedata
+      entry: current_A
+
+  - ocpp:
+      component:
+        name: PowerMeterDC
+        evse: { id: 1 }
+      variable:
+        name: FirmwareState
+    everest:
+      module_id: telemetry_producer
+      telemetry_set: livedata
+      entry: fw_state
+
+  # The diagnostics set is capped at 0.2 Hz, so these move at most once every five seconds.
+  - ocpp:
+      component:
+        name: PowerMeterDC
+        evse: { id: 1 }
+      variable:
+        name: Uptime
+    everest:
+      module_id: telemetry_producer
+      telemetry_set: diagnostics
+      entry: uptime_s
+
+  - ocpp:
+      component:
+        name: PowerMeterDC
+        evse: { id: 1 }
+      variable:
+        name: SerialNumber
+    everest:
+      module_id: telemetry_producer
+      telemetry_set: diagnostics
+      entry: serial
+
+# error_count is published by the diagnostics set and deliberately not mapped: it is the entry that
+# shows curation working, because it never reaches the CSMS and is never even published.

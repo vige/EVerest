@@ -101,6 +101,20 @@ public:
     /// \returns the number of slots left with a non-empty interest
     std::size_t declare_interest(const Filter& filter);
 
+    /// \brief Declares interest per flow, naming the entries of each set exactly.
+    ///
+    /// The filter overload above is one predicate applied to every slot, which is what a sink that
+    /// wants "everything of this shape" needs. A sink driven by a curated list -- an OCPP device
+    /// model mapping, say -- wants the opposite: a different, exact set of entries per flow, and
+    /// nothing at all from the flows the list does not name. Flows absent from \p wanted are
+    /// withdrawn.
+    ///
+    /// Resolves the definitions first if that has not happened yet, because a flow is identified by
+    /// the set name its definition carries. Entries a set does not declare are dropped here rather
+    /// than sent and ignored by the publisher.
+    /// \returns the number of slots left with a non-empty interest
+    std::size_t declare_interest(const std::map<SetKey, std::vector<std::string>>& wanted);
+
     /// \brief Withdraws interest from every slot that has any. Publishing stops when the last
     /// subscriber withdraws.
     void withdraw();

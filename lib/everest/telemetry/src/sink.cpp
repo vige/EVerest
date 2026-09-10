@@ -118,6 +118,46 @@ std::size_t Sink::declare_interest(const Filter& filter) {
     return interested;
 }
 
+std::size_t Sink::declare_interest(const std::map<SetKey, std::vector<std::string>>& wanted) {
+    if (not m_resolved) {
+        resolve_definitions();
+    }
+
+    std::size_t interested = 0;
+    for (std::size_t index = 0; index < m_slots.size(); ++index) {
+        const auto& definition = m_definitions.at(index);
+        std::vector<std::string> entries;
+        if (definition.has_value()) {
+            const auto it = wanted.find(SetKey{m_slots.at(index)->module_id, definition->set});
+            if (it != wanted.end()) {
+                // Declaration order, and only what the set actually declares: an entry the publisher
+                // does not know is dropped by it anyway, and keeping it here would make interest()
+                // report an interest that can never be satisfied.
+                for (const auto& declared : definition->entries) {
+                    if (std::find(it->second.begin(), it->second.end(), declared.name) != it->second.end()) {
+                        entries.push_back(declared.name);
+                    }
+                }
+            }
+        }
+
+        if (entries.empty() and m_interest.at(index).empty()) {
+            continue;
+        }
+
+        m_interest.at(index) = std::set<std::string>(entries.begin(), entries.end());
+        Array wire;
+        for (const auto& entry : entries) {
+            wire.push_back(entry);
+        }
+        m_slots.at(index)->call_set_interest(m_consumer_id, wire);
+        if (not entries.empty()) {
+            ++interested;
+        }
+    }
+    return interested;
+}
+
 void Sink::withdraw() {
     for (std::size_t index = 0; index < m_slots.size(); ++index) {
         if (m_interest.at(index).empty()) {
