@@ -12,6 +12,8 @@
 
 #include <generated/types/telemetry.hpp>
 #include <ocpp/v2/device_model_storage_interface.hpp>
+#include <ocpp/v2/device_model_storage_sqlite.hpp>
+#include <ocpp/v2/init_device_model_db.hpp>
 
 #include <everest/ocpp_module_common/device_model/telemetry_mapping.hpp>
 
@@ -34,11 +36,13 @@ inline constexpr auto VARIABLE_SOURCE_TELEMETRY = "TELEMETRY";
 /// writes and a read copies out of. The value of an entry that has not arrived yet is absent rather
 /// than zero: reporting a number the station never measured would be a lie the CSMS cannot detect.
 ///
-/// Monitors set by the CSMS live here too, in memory and keyed by the variable they watch. They are
-/// deliberately not persisted: a monitor on a measurement is a diagnostic a CSMS sets for as long as
-/// it is interested, and a station that came back from a reboot with monitors on values it may no
-/// longer publish would report events nobody asked for. Monitor ids are allocated from a range far
-/// above the SQLite row ids the OCPP-source storage hands out, so the two can never collide.
+/// Monitors are not held here. component_config() describes these variables the way a component
+/// config JSON would, and the caller seeds those rows into the device model database before the
+/// charge point is built, so a telemetry variable has a real VARIABLE row like any other. Monitor
+/// calls are then delegated to the storage that owns that database: monitors persist across a
+/// reboot, their ids come from the one sequence that also numbers every other monitor -- so a
+/// ClearVariableMonitoring id can never be ambiguous -- and dropping a variable that is no longer
+/// mapped takes its monitors with it through the foreign key.
 ///
 /// A read must never issue an EVerest framework command: libocpp calls it while holding the device
 /// model lock, and a command reply travels back through the MQTT machinery whose handler thread may
@@ -50,6 +54,18 @@ public:
     /// \param definitions the set definitions the sink resolved, keyed by flow
     TelemetryDeviceModelStorage(const std::vector<TelemetryMapping>& mappings,
                                 const std::map<Everest::telemetry::SetKey, types::telemetry::SetDefinition>& definitions);
+
+    /// \brief These variables as a component config, for seeding the device model database.
+    ///
+    /// Merge into what get_all_component_configs() read from the config directory and initialise
+    /// once over the union, so the integrity check sees a whole device model rather than a slice.
+    std::map<ocpp::v2::ComponentKey, std::vector<ocpp::v2::DeviceModelVariable>> component_config() const;
+
+    /// \brief Names the storage that owns the database the rows were seeded into.
+    ///
+    /// Every monitor call is forwarded there. Without one this storage answers no monitor call,
+    /// which is what an unseeded station gets.
+    void set_monitor_store(std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> store);
     virtual ~TelemetryDeviceModelStorage() override = default;
 
     /// \brief Records the values of \p update that some mapping reads from. Called from the sink.
@@ -88,11 +104,6 @@ private:
     /// \returns the string form of the value of \p mapping, or nothing when it has not arrived yet
     std::optional<std::string> read(const TelemetryMapping& mapping) const;
 
-    /// \returns the monitors of \p target that satisfy \p criteria
-    /// \pre monitor_mutex is held
-    std::vector<ocpp::v2::VariableMonitoringMeta>
-    monitors_of(const ocpp::v2::ComponentVariable& target,
-                const std::vector<ocpp::v2::MonitoringCriterionEnum>& criteria) const;
 
     std::map<ocpp::v2::ComponentVariable, TelemetryMapping> table;
     /// target -> the entry type its set declared, which is how a value is rendered
@@ -104,18 +115,24 @@ private:
     /// flow -> entry -> last value seen, as the string the device model reports
     std::map<Everest::telemetry::SetKey, std::map<std::string, std::string>> values;
 
-    /// \brief The first monitor id this storage hands out.
-    ///
-    /// The OCPP-source storage numbers its monitors with SQLite row ids, which start at 1. Ids are
-    /// the only handle a CSMS has on a monitor -- ClearVariableMonitoring names an id and nothing
-    /// else -- so the two ranges must not overlap.
-    static constexpr std::int32_t FIRST_MONITOR_ID = 0x20000000;
-
-    mutable std::mutex monitor_mutex;
-    std::int32_t next_monitor_id{FIRST_MONITOR_ID};
-    /// target -> monitor id -> the monitor
-    std::map<ocpp::v2::ComponentVariable, std::map<std::int32_t, ocpp::v2::VariableMonitoringMeta>> monitors;
+    /// The storage owning the database these variables were seeded into. Null until set.
+    std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> monitor_store;
 };
+
+/// \brief Initialises the device model database from \p config_path plus the telemetry components of
+/// \p telemetry, and returns the storage connected to it.
+///
+/// One initialisation over the union of the two, because the integrity check wants a whole device
+/// model rather than a slice. Seeding the telemetry variables as ordinary rows is what lets their
+/// monitors live in the ordinary monitor table, numbered from the ordinary id sequence. The returned
+/// storage is bound to \p telemetry as its monitor store.
+///
+/// With a null \p telemetry this is exactly the stock three-argument construction.
+std::shared_ptr<ocpp::v2::DeviceModelStorageSqlite>
+make_ocpp_device_model_storage(const std::filesystem::path& database_path,
+                               const std::filesystem::path& migration_path,
+                               const std::filesystem::path& config_path,
+                               const std::shared_ptr<TelemetryDeviceModelStorage>& telemetry);
 
 /// \returns the string form of the JSON scalar \p value as the device model reports it
 ///

@@ -70,33 +70,6 @@ const types::telemetry::EntryDefinition* entry_of(const types::telemetry::SetDef
     return it == definition.entries.end() ? nullptr : &*it;
 }
 
-/// \returns true when \p type is one of \p criteria, or when no criteria were given
-bool matches_criteria(ocpp::v2::MonitorEnum type, const std::vector<ocpp::v2::MonitoringCriterionEnum>& criteria) {
-    if (criteria.empty()) {
-        return true;
-    }
-    for (const auto& criterion : criteria) {
-        switch (criterion) {
-        case ocpp::v2::MonitoringCriterionEnum::ThresholdMonitoring:
-            if (type == ocpp::v2::MonitorEnum::UpperThreshold or type == ocpp::v2::MonitorEnum::LowerThreshold) {
-                return true;
-            }
-            break;
-        case ocpp::v2::MonitoringCriterionEnum::DeltaMonitoring:
-            if (type == ocpp::v2::MonitorEnum::Delta) {
-                return true;
-            }
-            break;
-        case ocpp::v2::MonitoringCriterionEnum::PeriodicMonitoring:
-            if (type == ocpp::v2::MonitorEnum::Periodic or type == ocpp::v2::MonitorEnum::PeriodicClockAligned) {
-                return true;
-            }
-            break;
-        }
-    }
-    return false;
-}
-
 } // namespace
 
 std::string render_value(const nlohmann::json& value, types::telemetry::EntryType type) {
@@ -184,7 +157,28 @@ const std::vector<std::string>& TelemetryDeviceModelStorage::unavailable() const
 }
 
 ocpp::v2::DeviceModelMap TelemetryDeviceModelStorage::get_device_model() {
-    return this->model;
+    if (this->monitor_store == nullptr) {
+        return this->model;
+    }
+
+    // The composed storage keeps a variable only from the source that owns it, so this is the only
+    // copy of these variables that survives the merge -- and it has to carry the monitors the
+    // database holds for them, or a monitor set before a reboot would be persisted and then never
+    // loaded. The structure stays ours; only the monitors come from the store.
+    auto model_with_monitors = this->model;
+    for (auto& [component, seeded] : this->monitor_store->get_device_model()) {
+        const auto ours = model_with_monitors.find(component);
+        if (ours == model_with_monitors.end()) {
+            continue;
+        }
+        for (auto& [variable, meta] : seeded) {
+            const auto variable_it = ours->second.find(variable);
+            if (variable_it != ours->second.end()) {
+                variable_it->second.monitors = std::move(meta.monitors);
+            }
+        }
+    }
+    return model_with_monitors;
 }
 
 std::optional<std::string> TelemetryDeviceModelStorage::read(const TelemetryMapping& mapping) const {
@@ -244,120 +238,113 @@ ocpp::v2::SetVariableStatusEnum TelemetryDeviceModelStorage::set_variable_attrib
     return ocpp::v2::SetVariableStatusEnum::Rejected;
 }
 
-std::vector<ocpp::v2::VariableMonitoringMeta>
-TelemetryDeviceModelStorage::monitors_of(const ocpp::v2::ComponentVariable& target,
-                                         const std::vector<ocpp::v2::MonitoringCriterionEnum>& criteria) const {
-    std::vector<ocpp::v2::VariableMonitoringMeta> found;
-    const auto it = this->monitors.find(target);
-    if (it == this->monitors.end()) {
-        return found;
-    }
-    for (const auto& [id, monitor] : it->second) {
-        if (not matches_criteria(monitor.monitor.type, criteria)) {
-            continue;
+void TelemetryDeviceModelStorage::set_monitor_store(std::shared_ptr<ocpp::v2::DeviceModelStorageInterface> store) {
+    this->monitor_store = std::move(store);
+}
+
+std::map<ocpp::v2::ComponentKey, std::vector<ocpp::v2::DeviceModelVariable>>
+TelemetryDeviceModelStorage::component_config() const {
+    std::map<ocpp::v2::ComponentKey, std::vector<ocpp::v2::DeviceModelVariable>> config;
+    for (const auto& [target, mapping] : this->table) {
+        ocpp::v2::ComponentKey component;
+        component.name = mapping.component.name.get();
+        if (mapping.component.instance.has_value()) {
+            component.instance = mapping.component.instance->get();
         }
-        found.push_back(monitor);
+        if (mapping.component.evse.has_value()) {
+            component.evse_id = mapping.component.evse->id;
+            component.connector_id = mapping.component.evse->connectorId;
+        }
+
+        ocpp::v2::DeviceModelVariable variable;
+        variable.name = mapping.variable.name.get();
+        if (mapping.variable.instance.has_value()) {
+            variable.instance = mapping.variable.instance->get();
+        }
+        variable.characteristics = this->model.at(mapping.component).at(mapping.variable).characteristics;
+        // The source is what routes reads back to this storage: the composed storage reads it out of
+        // the row the seeding writes.
+        variable.source = VARIABLE_SOURCE_TELEMETRY;
+
+        // One Actual attribute, so the variable is addressable and can carry a monitor. Its value is
+        // never written here -- a read is answered from memory -- so it is neither persistent nor
+        // seeded with a default that the station never measured.
+        ocpp::v2::DbVariableAttribute attribute;
+        attribute.variable_attribute.type = ocpp::v2::AttributeEnum::Actual;
+        attribute.variable_attribute.mutability = ocpp::v2::MutabilityEnum::ReadOnly;
+        attribute.variable_attribute.persistent = false;
+        attribute.variable_attribute.constant = false;
+        variable.attributes.push_back(attribute);
+
+        config[component].push_back(std::move(variable));
     }
-    return found;
+    return config;
 }
 
 std::optional<ocpp::v2::VariableMonitoringMeta>
 TelemetryDeviceModelStorage::set_monitoring_data(const ocpp::v2::SetMonitoringData& data,
                                                  const ocpp::v2::VariableMonitorType type) {
-    const ocpp::v2::ComponentVariable target{data.component, data.variable, std::nullopt};
-    const auto mapping = this->table.find(target);
-    if (mapping == this->table.end()) {
+    if (this->monitor_store == nullptr) {
         return std::nullopt;
     }
-
-    ocpp::v2::VariableMonitoringMeta meta;
-    meta.type = type;
-    meta.monitor.type = data.type;
-    meta.monitor.severity = data.severity;
-    meta.monitor.value = data.value;
-    meta.monitor.transaction = data.transaction.value_or(false);
-
-    if (data.type == ocpp::v2::MonitorEnum::Delta) {
-        // A delta is measured from a reference, so a delta monitor on an entry that has not arrived
-        // yet has nothing to measure from. Refusing is better than seeding a zero, which would fire
-        // once, spuriously, the moment the first real value shows up.
-        const auto value = read(mapping->second);
-        if (not value.has_value()) {
-            EVLOG_warning << "telemetry: refusing a delta monitor on " << mapping->second.to_string()
-                          << ": no value has been published yet, so there is no reference to measure from";
-            return std::nullopt;
-        }
-        meta.reference_value = *value;
-    }
-
-    std::lock_guard<std::mutex> lock{this->monitor_mutex};
-    if (data.id.has_value()) {
-        // An update names the id. Replacing in place keeps the id the CSMS holds valid.
-        meta.monitor.id = *data.id;
-    } else {
-        meta.monitor.id = this->next_monitor_id++;
-    }
-    this->monitors[target][meta.monitor.id] = meta;
-    return meta;
+    return this->monitor_store->set_monitoring_data(data, type);
 }
 
 bool TelemetryDeviceModelStorage::update_monitoring_reference(const int32_t monitor_id,
                                                               const std::string& reference_value) {
-    std::lock_guard<std::mutex> lock{this->monitor_mutex};
-    for (auto& [target, by_id] : this->monitors) {
-        const auto it = by_id.find(monitor_id);
-        if (it != by_id.end()) {
-            it->second.reference_value = reference_value;
-            return true;
-        }
-    }
-    return false;
+    return this->monitor_store == nullptr ? false
+                                          : this->monitor_store->update_monitoring_reference(monitor_id,
+                                                                                              reference_value);
 }
 
 std::vector<ocpp::v2::VariableMonitoringMeta>
 TelemetryDeviceModelStorage::get_monitoring_data(const std::vector<ocpp::v2::MonitoringCriterionEnum>& criteria,
                                                  const ocpp::v2::Component& component_id,
                                                  const ocpp::v2::Variable& variable_id) {
-    std::lock_guard<std::mutex> lock{this->monitor_mutex};
-    return monitors_of(ocpp::v2::ComponentVariable{component_id, variable_id, std::nullopt}, criteria);
+    if (this->monitor_store == nullptr) {
+        return {};
+    }
+    return this->monitor_store->get_monitoring_data(criteria, component_id, variable_id);
 }
 
 ocpp::v2::ClearMonitoringStatusEnum TelemetryDeviceModelStorage::clear_variable_monitor(int monitor_id,
                                                                                         bool allow_protected) {
-    std::lock_guard<std::mutex> lock{this->monitor_mutex};
-    for (auto& [target, by_id] : this->monitors) {
-        const auto it = by_id.find(monitor_id);
-        if (it == by_id.end()) {
-            continue;
-        }
-        if (not allow_protected and it->second.type != ocpp::v2::VariableMonitorType::CustomMonitor) {
-            return ocpp::v2::ClearMonitoringStatusEnum::Rejected;
-        }
-        by_id.erase(it);
-        return ocpp::v2::ClearMonitoringStatusEnum::Accepted;
+    if (this->monitor_store == nullptr) {
+        return ocpp::v2::ClearMonitoringStatusEnum::NotFound;
     }
-    // Not ours. The composed storage asks every source in turn, because a monitor id carries no
-    // hint of which one issued it.
-    return ocpp::v2::ClearMonitoringStatusEnum::NotFound;
+    return this->monitor_store->clear_variable_monitor(monitor_id, allow_protected);
 }
 
 int32_t TelemetryDeviceModelStorage::clear_custom_variable_monitors() {
-    std::lock_guard<std::mutex> lock{this->monitor_mutex};
-    std::int32_t cleared = 0;
-    for (auto& [target, by_id] : this->monitors) {
-        for (auto it = by_id.begin(); it != by_id.end();) {
-            if (it->second.type == ocpp::v2::VariableMonitorType::CustomMonitor) {
-                it = by_id.erase(it);
-                ++cleared;
-            } else {
-                ++it;
-            }
-        }
-    }
-    return cleared;
+    // The store is shared with the OCPP source, which is asked for its own custom monitors in the
+    // same fan-out. Answering here as well would clear them once and count them twice.
+    return 0;
 }
 
 void TelemetryDeviceModelStorage::check_integrity() {
+}
+
+std::shared_ptr<ocpp::v2::DeviceModelStorageSqlite>
+make_ocpp_device_model_storage(const std::filesystem::path& database_path,
+                               const std::filesystem::path& migration_path,
+                               const std::filesystem::path& config_path,
+                               const std::shared_ptr<TelemetryDeviceModelStorage>& telemetry) {
+    if (telemetry == nullptr) {
+        return std::make_shared<ocpp::v2::DeviceModelStorageSqlite>(database_path, migration_path, config_path);
+    }
+
+    auto configs = ocpp::v2::get_all_component_configs(config_path);
+    for (const auto& [component, variables] : telemetry->component_config()) {
+        auto& into = configs[component];
+        into.insert(into.end(), variables.begin(), variables.end());
+    }
+
+    ocpp::v2::InitDeviceModelDb init(database_path, migration_path);
+    init.initialize_database(configs, false);
+
+    auto storage = std::make_shared<ocpp::v2::DeviceModelStorageSqlite>(database_path);
+    telemetry->set_monitor_store(storage);
+    return storage;
 }
 
 } // namespace ocpp_module_common::device_model

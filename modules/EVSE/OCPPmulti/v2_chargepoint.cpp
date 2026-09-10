@@ -459,10 +459,11 @@ ocpp::v2::Callbacks ChargePointV2::configure_callbacks() {
 }
 
 void ChargePointV2::init(init_args_t& args) {
-    // initialise libocpp device model
-    auto libocpp_device_model_storage = std::make_shared<ocpp::v2::DeviceModelStorageSqlite>(
+    // initialise libocpp device model. Telemetry variables are seeded into the same database as
+    // ordinary rows, so their monitors live in the ordinary monitor table.
+    auto libocpp_device_model_storage = module::device_model::make_ocpp_device_model_storage(
         args.v2_device_model_database_path, args.v2_device_model_database_migration_path,
-        args.v2_device_model_config_path);
+        args.v2_device_model_config_path, args.telemetry_device_model);
 
     // initialise composed device model, this will be provided to the ChargePoint constructor
     auto composed_device_model_storage = module::device_model::make_composed_device_model_storage(

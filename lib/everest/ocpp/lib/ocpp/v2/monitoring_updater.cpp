@@ -264,15 +264,14 @@ void MonitoringUpdater::evaluate_monitor(const VariableMonitoringMeta& monitor_m
     }
 
     if (monitor_triggered) {
-        if (monitor_meta.monitor.type == MonitorEnum::Delta && monitor_trivial) {
-            // 3.55. MonitorEnumType
-            // As per the spec, in case of a delta monitor that always triggered (bool/dateTime etc...)
-            // we must update the reference value to the new value, so that we don't always trigger
-            // this multiple times when it changes
-
+        if (monitor_meta.monitor.type == MonitorEnum::Delta) {
             // N07.FR.18 - "plus or minus monitorValue since the time that this monitor was set or
-            // since the last time this event notice was sent, whichever was last"
+            // since the last time this event notice was sent, whichever was last". The reference
+            // moves whenever the notice is sent, for a numeric delta as much as for a trivial one:
+            // a numeric delta that kept its first reference would report the same excursion on
+            // every evaluation for as long as the value stayed away from it.
             // A 'cleared' state has no value for a delta monitor
+            (void)monitor_trivial;
             try {
                 EVLOG_debug << "Updated monitor: " << monitor_meta.monitor << " reference to: " << value_current;
 
@@ -491,6 +490,18 @@ void MonitoringUpdater::update_pull_monitors_internal() {
             }
 
             seen.insert(monitor_id);
+
+            // A delta monitor set before its variable ever had a value carries no reference. Adopt
+            // the first value seen as the reference rather than evaluating against nothing: the
+            // spec measures a delta from "the time that this monitor was set", and this is the
+            // earliest moment that time can be given a value.
+            if (monitor_meta.monitor.type == MonitorEnum::Delta and not monitor_meta.reference_value.has_value()) {
+                if (not this->device_model.update_monitor_reference(monitor_id, value_current)) {
+                    EVLOG_warning << "Could not seed the reference of delta monitor " << monitor_id;
+                }
+                this->pulled_values[monitor_id] = value_current;
+                continue;
+            }
 
             // On the first pass a variable has no previous value of its own. Using the current one
             // means a value that is already over a threshold still triggers -- a threshold is

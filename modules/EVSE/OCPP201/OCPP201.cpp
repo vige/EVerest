@@ -1070,9 +1070,14 @@ void OCPP201::ready() {
 
     std::map<int32_t, int32_t> evse_connector_structure = this->get_connector_structure();
 
+    // Build the telemetry storage before the database: its variables are seeded as ordinary rows, so
+    // that their monitors can live in the ordinary monitor table.
+    const auto telemetry_device_model_storage = this->make_telemetry_device_model_storage();
+
     // initialize libocpp device model
-    auto libocpp_device_model_storage = std::make_shared<ocpp::v2::DeviceModelStorageSqlite>(
-        device_model_database_path, device_model_database_migration_path, device_model_config_path);
+    auto libocpp_device_model_storage = device_model::make_ocpp_device_model_storage(
+        device_model_database_path, device_model_database_migration_path, device_model_config_path,
+        telemetry_device_model_storage);
 
     // initialize everest device model
     // no DER components: this module does not implement der_active_directives_callback (DER is OCPPmulti-only)
@@ -1091,9 +1096,9 @@ void OCPP201::ready() {
 
     // Registration snapshots get_device_model(), so this has to happen before the ChargePoint is
     // constructed; libocpp reads the structure once and never asks again.
-    if (const auto telemetry_storage = this->make_telemetry_device_model_storage(); telemetry_storage != nullptr) {
+    if (telemetry_device_model_storage != nullptr) {
         composed_device_model_storage->register_device_model_storage(device_model::VARIABLE_SOURCE_TELEMETRY,
-                                                                     telemetry_storage);
+                                                                     telemetry_device_model_storage);
     }
 
     this->charge_point = std::make_unique<ocpp::v2::ChargePoint>(

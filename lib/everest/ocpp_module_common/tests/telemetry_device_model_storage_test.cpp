@@ -164,95 +164,131 @@ ocpp::v2::SetMonitoringData monitor_request(const TelemetryMapping& mapping, ocp
     return request;
 }
 
-TEST(TelemetryDeviceModelStorage, HoldsMonitorsOutsideTheSqliteIdRange) {
+// The component config these variables are seeded into the device model database as. Getting this
+// wrong means the VARIABLE row is missing and a monitor has no row to hang off.
+TEST(TelemetryDeviceModelStorage, DescribesItsVariablesAsAComponentConfig) {
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C", 1);
+    TelemetryDeviceModelStorage storage({temperature}, definitions());
+
+    const auto config = storage.component_config();
+    ASSERT_EQ(config.size(), 1);
+    const auto& [component, variables] = *config.begin();
+    EXPECT_EQ(component.name, "PowerMeterDC");
+    EXPECT_EQ(component.evse_id.value(), 1);
+    ASSERT_EQ(variables.size(), 1);
+
+    const auto& variable = variables.front();
+    EXPECT_EQ(variable.name, "MeterTemperature");
+    // The source on the row is what routes reads back to this storage once it is registered.
+    ASSERT_TRUE(variable.source.has_value());
+    EXPECT_EQ(variable.source.value(), VARIABLE_SOURCE_TELEMETRY);
+    EXPECT_EQ(variable.characteristics.dataType, ocpp::v2::DataEnum::decimal);
+    ASSERT_EQ(variable.attributes.size(), 1);
+    EXPECT_EQ(variable.attributes.front().variable_attribute.mutability, ocpp::v2::MutabilityEnum::ReadOnly);
+    // Never written, so never persisted, and no default value the station did not measure.
+    EXPECT_FALSE(variable.attributes.front().variable_attribute.persistent.value());
+    EXPECT_FALSE(variable.attributes.front().variable_attribute.value.has_value());
+}
+
+// Records what it was asked, so the tests can assert the call was forwarded rather than answered.
+class FakeMonitorStore : public ocpp::v2::DeviceModelStorageInterface {
+public:
+    std::vector<ocpp::v2::SetMonitoringData> set_requests;
+    std::vector<int> cleared;
+
+    ocpp::v2::DeviceModelMap get_device_model() override {
+        return {};
+    }
+    std::optional<ocpp::v2::VariableAttribute> get_variable_attribute(const ocpp::v2::Component&,
+                                                                      const ocpp::v2::Variable&,
+                                                                      const ocpp::v2::AttributeEnum&) override {
+        return std::nullopt;
+    }
+    std::vector<ocpp::v2::VariableAttribute>
+    get_variable_attributes(const ocpp::v2::Component&, const ocpp::v2::Variable&,
+                            const std::optional<ocpp::v2::AttributeEnum>&) override {
+        return {};
+    }
+    ocpp::v2::SetVariableStatusEnum set_variable_attribute_value(const ocpp::v2::Component&, const ocpp::v2::Variable&,
+                                                                 const ocpp::v2::AttributeEnum&, const std::string&,
+                                                                 const std::string&) override {
+        return ocpp::v2::SetVariableStatusEnum::Rejected;
+    }
+    std::optional<ocpp::v2::VariableMonitoringMeta>
+    set_monitoring_data(const ocpp::v2::SetMonitoringData& data, const ocpp::v2::VariableMonitorType type) override {
+        this->set_requests.push_back(data);
+        ocpp::v2::VariableMonitoringMeta meta;
+        meta.type = type;
+        meta.monitor.id = 7;
+        meta.monitor.type = data.type;
+        return meta;
+    }
+    bool update_monitoring_reference(const std::int32_t, const std::string&) override {
+        return true;
+    }
+    std::vector<ocpp::v2::VariableMonitoringMeta>
+    get_monitoring_data(const std::vector<ocpp::v2::MonitoringCriterionEnum>&, const ocpp::v2::Component&,
+                        const ocpp::v2::Variable&) override {
+        return {ocpp::v2::VariableMonitoringMeta{}};
+    }
+    ocpp::v2::ClearMonitoringStatusEnum clear_variable_monitor(int monitor_id, bool) override {
+        this->cleared.push_back(monitor_id);
+        return ocpp::v2::ClearMonitoringStatusEnum::Accepted;
+    }
+    std::int32_t clear_custom_variable_monitors() override {
+        return 4;
+    }
+    void check_integrity() override {
+    }
+};
+
+// Monitors belong in the database the variables were seeded into, so that they persist and so that
+// their ids come from the same sequence as every other monitor.
+TEST(TelemetryDeviceModelStorage, ForwardsMonitorsToTheSeededStore) {
     const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
     TelemetryDeviceModelStorage storage({temperature}, definitions());
+    auto store = std::make_shared<FakeMonitorStore>();
+    storage.set_monitor_store(store);
 
     const auto monitor = storage.set_monitoring_data(monitor_request(temperature, ocpp::v2::MonitorEnum::Periodic, 5),
                                                      ocpp::v2::VariableMonitorType::CustomMonitor);
     ASSERT_TRUE(monitor.has_value());
-    // The OCPP-source storage numbers monitors with SQLite row ids from 1. An overlap would make
-    // ClearVariableMonitoring ambiguous, because the id is all the CSMS sends.
-    EXPECT_GT(monitor->monitor.id, 0x10000000);
+    EXPECT_EQ(monitor->monitor.id, 7);
+    ASSERT_EQ(store->set_requests.size(), 1);
 
-    const auto found = storage.get_monitoring_data({}, temperature.component, temperature.variable);
-    ASSERT_EQ(found.size(), 1);
-    EXPECT_EQ(found.front().monitor.id, monitor->monitor.id);
+    EXPECT_EQ(storage.get_monitoring_data({}, temperature.component, temperature.variable).size(), 1);
+    EXPECT_EQ(storage.clear_variable_monitor(7, true), ocpp::v2::ClearMonitoringStatusEnum::Accepted);
+    EXPECT_EQ(store->cleared, std::vector<int>{7});
+    EXPECT_TRUE(storage.update_monitoring_reference(7, "1"));
 
-    // Criteria filter on the monitor type.
-    EXPECT_EQ(storage.get_monitoring_data({ocpp::v2::MonitoringCriterionEnum::PeriodicMonitoring},
-                                          temperature.component, temperature.variable)
-                  .size(),
-              1);
-    EXPECT_TRUE(storage.get_monitoring_data({ocpp::v2::MonitoringCriterionEnum::DeltaMonitoring},
-                                            temperature.component, temperature.variable)
-                    .empty());
+    // The shared store is asked for its custom monitors once, by the source that owns it. Answering
+    // here as well would clear them once and count them twice.
+    EXPECT_EQ(storage.clear_custom_variable_monitors(), 0);
 }
 
-// A delta is measured from a reference, so there has to be one.
-TEST(TelemetryDeviceModelStorage, RefusesADeltaMonitorUntilAValueHasArrived) {
+// A delta monitor is valid before the first value arrives; it simply cannot fire yet. Refusing it
+// would deny the CSMS a monitor it is entitled to.
+TEST(TelemetryDeviceModelStorage, AcceptsADeltaMonitorBeforeAnyValueHasArrived) {
+    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
+    TelemetryDeviceModelStorage storage({temperature}, definitions());
+    auto store = std::make_shared<FakeMonitorStore>();
+    storage.set_monitor_store(store);
+
+    EXPECT_TRUE(storage
+                    .set_monitoring_data(monitor_request(temperature, ocpp::v2::MonitorEnum::Delta, 1),
+                                         ocpp::v2::VariableMonitorType::CustomMonitor)
+                    .has_value());
+}
+
+TEST(TelemetryDeviceModelStorage, AnswersNoMonitorCallWithoutAStore) {
     const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
     TelemetryDeviceModelStorage storage({temperature}, definitions());
 
     EXPECT_FALSE(storage
-                     .set_monitoring_data(monitor_request(temperature, ocpp::v2::MonitorEnum::Delta, 1),
+                     .set_monitoring_data(monitor_request(temperature, ocpp::v2::MonitorEnum::Periodic, 5),
                                           ocpp::v2::VariableMonitorType::CustomMonitor)
                      .has_value());
-
-    storage.on_update(update_of({{"temperature_C", 40.5}}));
-    const auto monitor = storage.set_monitoring_data(monitor_request(temperature, ocpp::v2::MonitorEnum::Delta, 1),
-                                                     ocpp::v2::VariableMonitorType::CustomMonitor);
-    ASSERT_TRUE(monitor.has_value());
-    ASSERT_TRUE(monitor->reference_value.has_value());
-    EXPECT_EQ(monitor->reference_value.value(), "40.5");
-
-    EXPECT_TRUE(storage.update_monitoring_reference(monitor->monitor.id, "41.5"));
-    EXPECT_EQ(storage.get_monitoring_data({}, temperature.component, temperature.variable)
-                  .front()
-                  .reference_value.value(),
-              "41.5");
-    EXPECT_FALSE(storage.update_monitoring_reference(monitor->monitor.id + 1, "0"));
-}
-
-TEST(TelemetryDeviceModelStorage, ClearsOnlyItsOwnMonitors) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
-
-    const auto monitor = storage.set_monitoring_data(monitor_request(temperature, ocpp::v2::MonitorEnum::Periodic, 5),
-                                                     ocpp::v2::VariableMonitorType::CustomMonitor);
-    ASSERT_TRUE(monitor.has_value());
-
-    // An id from another source is NotFound, not Rejected, so the composed storage keeps asking.
-    EXPECT_EQ(storage.clear_variable_monitor(1, true), ocpp::v2::ClearMonitoringStatusEnum::NotFound);
-    EXPECT_EQ(storage.clear_variable_monitor(monitor->monitor.id, true),
-              ocpp::v2::ClearMonitoringStatusEnum::Accepted);
-    EXPECT_TRUE(storage.get_monitoring_data({}, temperature.component, temperature.variable).empty());
-}
-
-TEST(TelemetryDeviceModelStorage, ClearCustomLeavesPreconfiguredMonitorsAlone) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
-
-    storage.set_monitoring_data(monitor_request(temperature, ocpp::v2::MonitorEnum::Periodic, 5),
-                                ocpp::v2::VariableMonitorType::CustomMonitor);
-    storage.set_monitoring_data(monitor_request(temperature, ocpp::v2::MonitorEnum::UpperThreshold, 50),
-                                ocpp::v2::VariableMonitorType::PreconfiguredMonitor);
-
-    EXPECT_EQ(storage.clear_custom_variable_monitors(), 1);
-    const auto left = storage.get_monitoring_data({}, temperature.component, temperature.variable);
-    ASSERT_EQ(left.size(), 1);
-    EXPECT_EQ(left.front().type, ocpp::v2::VariableMonitorType::PreconfiguredMonitor);
-}
-
-TEST(TelemetryDeviceModelStorage, RefusesAMonitorOnAnUnmappedTarget) {
-    const auto temperature = mapping_of("PowerMeterDC", "MeterTemperature", "temperature_C");
-    TelemetryDeviceModelStorage storage({temperature}, definitions());
-
-    auto elsewhere = mapping_of("SomethingElse", "Whatever", "temperature_C");
-    EXPECT_FALSE(storage
-                     .set_monitoring_data(monitor_request(elsewhere, ocpp::v2::MonitorEnum::Periodic, 5),
-                                          ocpp::v2::VariableMonitorType::CustomMonitor)
-                     .has_value());
+    EXPECT_EQ(storage.clear_variable_monitor(7, true), ocpp::v2::ClearMonitoringStatusEnum::NotFound);
 }
 
 } // namespace

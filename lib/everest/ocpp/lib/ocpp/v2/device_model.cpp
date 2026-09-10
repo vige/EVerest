@@ -707,12 +707,15 @@ bool DeviceModel::update_monitor_reference(std::int32_t monitor_id, const std::s
             if (it != std::end(variable_meta_data.monitors)) {
                 auto& characteristics = variable_meta_data.characteristics;
 
-                if ((characteristics.dataType == DataEnum::boolean) || (characteristics.dataType == DataEnum::string) ||
-                    (characteristics.dataType == DataEnum::dateTime) ||
-                    (characteristics.dataType == DataEnum::OptionList) ||
-                    (characteristics.dataType == DataEnum::MemberList) ||
-                    (characteristics.dataType == DataEnum::SequenceList) &&
-                        (it->second.monitor.type == MonitorEnum::Delta)) {
+                // Every delta monitor has a reference, whatever its data type. N07.FR.18 measures a
+                // delta from "the time that this monitor was set or since the last time this event
+                // notice was sent, whichever was last", so the reference is both seeded and
+                // advanced through here. A numeric delta that could not advance its reference would
+                // keep reporting the same excursion on every evaluation.
+                //
+                // Only deltas have a reference at all, so nothing else can be updated here.
+                (void)characteristics;
+                if (it->second.monitor.type == MonitorEnum::Delta) {
                     monitor_meta = &it->second;
                     found_monitor = true;
                 } else {
@@ -736,7 +739,7 @@ bool DeviceModel::update_monitor_reference(std::int32_t monitor_id, const std::s
                 monitor_meta->reference_value = reference_value;
                 return true;
             }
-            EVLOG_warning << "Could not update in DB trivial delta monitor with ID: " << monitor_id
+            EVLOG_warning << "Could not update in DB delta monitor with ID: " << monitor_id
                           << ". Reference value not updated!";
 
         } catch (const everest::db::Exception& e) {
@@ -744,7 +747,7 @@ bool DeviceModel::update_monitor_reference(std::int32_t monitor_id, const std::s
             throw DeviceModelError(e.what());
         }
     } else {
-        EVLOG_warning << "Could not find trivial delta monitor with ID: " << monitor_id
+        EVLOG_warning << "Could not find delta monitor with ID: " << monitor_id
                       << ". Reference value not updated!";
     }
 

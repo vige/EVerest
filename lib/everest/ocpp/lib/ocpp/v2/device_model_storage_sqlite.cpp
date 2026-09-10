@@ -287,15 +287,16 @@ std::optional<VariableMonitoringMeta> DeviceModelStorageSqlite::set_monitoring_d
 
     std::optional<std::string> actual_value;
 
-    // For a delta monitor, the actual value is mandatory,
-    // since it is used as a reference value when triggering
+    // A delta is measured from a reference value, so it is seeded with the value the variable has
+    // now. A variable that has not been written or read yet has none, which is not a reason to
+    // refuse the monitor: the request is well formed and the CSMS is entitled to have it. The
+    // reference is left null and adopted from the first value observed, and until then the monitor
+    // simply does not fire.
     if (data.type == MonitorEnum::Delta) {
-        auto attrib = get_variable_attribute(data.component, data.variable, AttributeEnum::Actual);
+        const auto attrib = get_variable_attribute(data.component, data.variable, AttributeEnum::Actual);
 
         if (attrib.has_value() && attrib.value().value.has_value()) {
             actual_value = attrib.value().value.value();
-        } else {
-            return std::nullopt;
         }
     }
 
