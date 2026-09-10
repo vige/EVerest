@@ -56,6 +56,8 @@ def setup_jinja_env():
         'ld-ev.hpp': env.get_template('ld-ev.hpp.j2'),
         'ld-ev.cpp': env.get_template('ld-ev.cpp.j2'),
         'telemetry-publisher.hpp': env.get_template('telemetry-publisher.hpp.j2'),
+        'telemetry.hpp': env.get_template('telemetry.hpp.j2'),
+        'telemetry.cpp': env.get_template('telemetry.cpp.j2'),
         'cmakelists': env.get_template('CMakeLists.txt.j2'),
         'index.rst': env.get_template('index.rst.j2'),
     })
@@ -233,6 +235,12 @@ def generate_tmpl_data_for_module(module, module_def):
         },
         'provides': provides,
         'requires': requires,
+        # What this module measures, as OpenTelemetry instruments, or None when it measures
+        # nothing. A sibling of provides and requires in the manifest, because telemetry provides
+        # no interface and requires no connection. Always present, because the templates are
+        # rendered with StrictUndefined.
+        'telemetry': (helpers.build_module_telemetry_info(module, module_def['telemetry'])
+                      if 'telemetry' in module_def else None),
     }
 
     return tmpl_data
@@ -288,6 +296,22 @@ def generate_module_loader_files(rel_mod_dir, output_dir):
         'template_path': Path(templates['ld-ev.cpp'].filename),
         'last_mtime': mod_path.stat().st_mtime
     })
+
+    # the OpenTelemetry client of this module, when the manifest declares what it measures
+    if tmpl_data['telemetry'] is not None:
+        for suffix, guard in (('hpp', f'TELEMETRY_{mod.upper()}_HPP'), ('cpp', None)):
+            data = dict(tmpl_data)
+            data['info'] = dict(tmpl_data['info'])
+            if guard is not None:
+                data['info']['hpp_guard'] = guard
+            loader_files.append({
+                'filename': f'telemetry.{suffix}',
+                'path': output_dir / mod / f'telemetry.{suffix}',
+                'printable_name': f'{mod}/telemetry.{suffix}',
+                'content': templates[f'telemetry.{suffix}'].render(data),
+                'template_path': Path(templates[f'telemetry.{suffix}'].filename),
+                'last_mtime': mod_path.stat().st_mtime
+            })
 
     # one generated publisher per implementation that declares a telemetry set
     for impl in tmpl_data['provides']:
@@ -672,7 +696,9 @@ def module_get_templates(args):
     interface_files = args.separator.join(
         [templates['ld-ev.hpp'].filename,
          templates['ld-ev.cpp'].filename,
-         templates['telemetry-publisher.hpp'].filename])
+         templates['telemetry-publisher.hpp'].filename,
+         templates['telemetry.hpp'].filename,
+         templates['telemetry.cpp'].filename])
 
     print(f'{interface_files}')
 

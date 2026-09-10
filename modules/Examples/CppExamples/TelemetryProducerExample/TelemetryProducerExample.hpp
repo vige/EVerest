@@ -11,8 +11,7 @@
 #include "ld-ev.hpp"
 
 // headers for provided interface implementations
-#include <telemetry_livedata.hpp>
-#include <telemetry_diagnostics.hpp>
+#include <generated/interfaces/empty/Implementation.hpp>
 
 
 // ev@4bf81b14-a215-475c-a1d3-0a484ae48918:v1
@@ -37,18 +36,15 @@ public:
     TelemetryProducerExample() = delete;
     TelemetryProducerExample(
         const ModuleInfo& info,
-        std::unique_ptr<livedata::telemetryPublisher> p_livedata,
-        std::unique_ptr<diagnostics::telemetryPublisher> p_diagnostics,
+        std::unique_ptr<emptyImplBase> p_main,
         Conf& config
     ) :
         ModuleBase(info),
-        p_livedata(std::move(p_livedata)),
-        p_diagnostics(std::move(p_diagnostics)),
+        p_main(std::move(p_main)),
         config(config)
     {};
 
-    const std::unique_ptr<livedata::telemetryPublisher> p_livedata;
-    const std::unique_ptr<diagnostics::telemetryPublisher> p_diagnostics;
+    const std::unique_ptr<emptyImplBase> p_main;
     const Conf& config;
 
     // ev@1fce4c5e-0ab8-41bb-90f7-14277703d2ac:v1

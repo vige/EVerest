@@ -678,10 +678,27 @@ function (ev_add_cpp_module MODULE_NAME)
             set(GENERATED_MODULE_DIR "${GENERATED_OUTPUT_DIR}/modules")
             set(MODULE_LOADER_DIR ${GENERATED_MODULE_DIR}/${MODULE_NAME})
 
+            # A module that declares telemetry: in its manifest also gets a generated
+            # OpenTelemetry client. Whether it does is a property of the manifest, so it is read
+            # here rather than configured per module.
+            file(READ "${MODULE_PATH}/manifest.yaml" _MANIFEST_TEXT)
+            string(REGEX MATCH "(^|\n)telemetry:" MODULE_DECLARES_TELEMETRY "${_MANIFEST_TEXT}")
+            unset(_MANIFEST_TEXT)
+
+            set(MODULE_LOADER_OUTPUTS
+                ${MODULE_LOADER_DIR}/ld-ev.hpp
+                ${MODULE_LOADER_DIR}/ld-ev.cpp
+            )
+            if(MODULE_DECLARES_TELEMETRY)
+                list(APPEND MODULE_LOADER_OUTPUTS
+                    ${MODULE_LOADER_DIR}/telemetry.hpp
+                    ${MODULE_LOADER_DIR}/telemetry.cpp
+                )
+            endif()
+
             add_custom_command(
                 OUTPUT
-                    ${MODULE_LOADER_DIR}/ld-ev.hpp
-                    ${MODULE_LOADER_DIR}/ld-ev.cpp
+                    ${MODULE_LOADER_OUTPUTS}
                 COMMAND
                     ${EV_CLI} module generate-loader
                         --disable-clang-format
@@ -729,6 +746,20 @@ function (ev_add_cpp_module MODULE_NAME)
                     everest::project_info
                     ${ATOMIC_LIBS}
             )
+
+            if(MODULE_DECLARES_TELEMETRY)
+                target_sources(${MODULE_NAME} PRIVATE "${MODULE_LOADER_DIR}/telemetry.cpp")
+                if(EVEREST_ENABLE_OTLP_TELEMETRY)
+                    target_compile_definitions(${MODULE_NAME} PRIVATE EVEREST_ENABLE_OTLP_TELEMETRY)
+                    target_link_libraries(${MODULE_NAME}
+                        PRIVATE
+                            opentelemetry-cpp::metrics
+                            opentelemetry-cpp::otlp_http_metric_exporter
+                    )
+                endif()
+                # With the flag off the generated header defines the same calls as no-ops, so the
+                # module's own source is identical in both builds and nothing is linked.
+            endif()
 
             if(EVEREST_ENABLE_COMPILE_WARNINGS)
                 message(STATUS "Building ${MODULE_NAME} with the following compile options: ${EVEREST_COMPILE_OPTIONS}")

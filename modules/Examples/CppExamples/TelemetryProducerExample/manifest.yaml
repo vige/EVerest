@@ -1,65 +1,40 @@
 description: >-
-  A telemetry publisher whose two sets are declared in this manifest. Both implementations are
-  generated from those declarations: the module writes no interface code, answers no commands and
-  keeps no interest table. It samples a simulator instead of hardware, so it stands in for a driver
+  A telemetry publisher whose measurements are declared in this manifest. The OpenTelemetry client
+  is generated from that declaration: the module writes no export code, holds no exporter and
+  configures no endpoint. It samples a simulator instead of hardware, so it stands in for a driver
   without needing one.
 config:
   publish_interval_ms:
-    description: How often the simulator samples. The rate cap of each set applies on top.
+    description: How often the simulator samples. The export interval applies on top.
     type: integer
     minimum: 10
     default: 250
   live_only:
-    description: Sample the livedata set only, leaving diagnostics silent.
+    description: Sample the live electrical measurements only, leaving the slow ones alone.
     type: boolean
     default: false
 provides:
-  livedata:
-    interface: telemetry
-    description: Live electrical measurements
-    telemetry:
-      max_publish_rate_hz: 4
-      entries:
-        temperature_C:
-          description: Board temperature
-          type: number
-          unit: Celsius
-          minimum: -40
-          maximum: 120
-        frequency_Hz:
-          description: Grid frequency
-          type: number
-          unit: Hz
-          minimum: 45
-          maximum: 55
-        current_A:
-          description: Output current
-          type: number
-          unit: A
-          minimum: 0
-          maximum: 500
-        fw_state:
-          description: Firmware state
-          type: string
-          enum: [Idle, Measuring, Error]
-  diagnostics:
-    interface: telemetry
-    description: Slow changing device diagnostics
-    telemetry:
-      max_publish_rate_hz: 0.2
-      entries:
-        uptime_s:
-          description: Seconds since the module started
-          type: integer
-          unit: s
-          minimum: 0
-        error_count:
-          description: Errors since the module started
-          type: integer
-          minimum: 0
-        serial:
-          description: Device serial number
-          type: string
+  main:
+    interface: empty
+    description: >-
+      Nothing. A module has to provide something, and what this one does -- measure -- is declared
+      below rather than here, because telemetry is not an interface.
+telemetry:
+  metrics:
+    powermeter.temperature:
+      description: Board temperature
+      unit: Cel
+    powermeter.frequency:
+      description: Grid frequency
+      unit: Hz
+    powermeter.current:
+      description: Output current
+      unit: A
+    powermeter.uptime:
+      description: Seconds since the module started
+      unit: s
+      instrument: counter
+      type: int
 metadata:
   license: https://opensource.org/licenses/Apache-2.0
   authors:

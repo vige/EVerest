@@ -234,4 +234,51 @@ properties:
     description: this requests access to the global error subscription interface
     type: boolean
     default: false
+  telemetry:
+    description: >-
+      Measurements this module publishes as OpenTelemetry. A sibling of provides and requires
+      rather than part of either, because telemetry provides no interface and requires no
+      connection: it leaves the station over OTLP and is read by whoever is listening.
+    type: object
+    required:
+      - metrics
+    properties:
+      meter:
+        description: >-
+          The OpenTelemetry instrumentation scope. Defaults to everest.modules.<module type>.
+        type: string
+        minLength: 2
+      metrics:
+        description: The declared metrics, keyed by metric name
+        type: object
+        minProperties: 1
+        patternProperties:
+          # OpenTelemetry names are dotted, which is the convention its semantic conventions use
+          ^[a-zA-Z][a-zA-Z0-9_.]*$:
+            type: object
+            required:
+              - description
+            properties:
+              description:
+                description: Human readable description, exported with the metric
+                type: string
+                minLength: 2
+              unit:
+                description: Unit of measurement as UCUM, e.g. Cel, Hz, W.h, By, "1"
+                type: string
+              instrument:
+                description: >-
+                  gauge for a value that is what it is, counter for one that only rises,
+                  updowncounter for one that rises and falls, histogram for a distribution
+                type: string
+                enum: [gauge, counter, updowncounter, histogram]
+                default: gauge
+              type:
+                description: Value type of the measurement
+                type: string
+                enum: [double, int]
+                default: double
+            additionalProperties: false
+        additionalProperties: false
+    additionalProperties: false
 additionalProperties: false

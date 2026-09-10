@@ -1,0 +1,149 @@
+{% from "helper_macros.j2" import print_template_info, print_spdx_line %}
+{{ print_spdx_line('Apache-2.0') }}
+
+{{ print_template_info('1') }}
+
+#include "telemetry.hpp"
+
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <mutex>
+#include <string>
+#include <thread>
+
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+#include <opentelemetry/exporters/otlp/otlp_http_metric_exporter_factory.h>
+#include <opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_factory.h>
+#include <opentelemetry/sdk/metrics/export/periodic_exporting_metric_reader_options.h>
+#include <opentelemetry/sdk/metrics/meter_provider.h>
+#include <opentelemetry/sdk/metrics/meter_provider_factory.h>
+#include <opentelemetry/metrics/provider.h>
+#include <opentelemetry/nostd/shared_ptr.h>
+#include <opentelemetry/sdk/metrics/view/view_registry.h>
+#include <opentelemetry/sdk/resource/resource.h>
+// service.namespace and service.instance.id are still incubating; the stable header
+// carries only service.name
+#include <opentelemetry/semconv/incubating/service_attributes.h>
+#endif
+
+namespace module {
+
+namespace {
+ModuleTelemetry instruments;
+
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+/// The SDK of this module process. Held so that shutdown can flush it; the API reaches it through
+/// the global provider rather than through this.
+std::shared_ptr<opentelemetry::sdk::metrics::MeterProvider> provider;
+
+/// An unreachable collector must not hold up an EVerest shutdown.
+constexpr auto SHUTDOWN_TIMEOUT = std::chrono::seconds(2);
+
+/// What OTEL_METRIC_EXPORT_INTERVAL defaults to, per the OpenTelemetry specification.
+constexpr auto DEFAULT_EXPORT_INTERVAL = std::chrono::milliseconds(60000);
+
+/// \brief Drives the export, because the SDK's own periodic reader does not.
+///
+/// opentelemetry-cpp 1.24 starts a PeriodicExportingMetricReader worker thread that never
+/// exports in this configuration -- measured at zero exports over twenty seconds with a two
+/// second interval, while ForceFlush on the same provider exports every time. Until that is
+/// understood, the interval is kept by this thread, which flushes on it.
+std::thread exporter_thread;
+std::mutex exporter_mutex;
+std::condition_variable exporter_wakeup;
+bool exporting = false;
+
+std::chrono::milliseconds export_interval() {
+    const char* configured = std::getenv("OTEL_METRIC_EXPORT_INTERVAL");
+    if (configured == nullptr) {
+        return DEFAULT_EXPORT_INTERVAL;
+    }
+    try {
+        const auto milliseconds = std::stoll(configured);
+        return milliseconds > 0 ? std::chrono::milliseconds(milliseconds) : DEFAULT_EXPORT_INTERVAL;
+    } catch (const std::exception&) {
+        return DEFAULT_EXPORT_INTERVAL;
+    }
+}
+#endif
+} // namespace
+
+ModuleTelemetry& telemetry() {
+    return instruments;
+}
+
+void telemetry_install(const ModuleInfo& info) {
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+    namespace otlp = opentelemetry::exporter::otlp;
+    namespace sdk = opentelemetry::sdk;
+    namespace semconv = opentelemetry::semconv;
+
+    // What a backend needs to tell one station's modules apart, and one station from another. The
+    // station's own identity arrives through OTEL_RESOURCE_ATTRIBUTES, which the SDK merges in.
+    const auto resource = sdk::resource::Resource::Create({
+        {semconv::service::kServiceNamespace, "everest"},
+        {semconv::service::kServiceName, info.name},
+        {semconv::service::kServiceInstanceId, info.id},
+    });
+
+    // The endpoint and the interval come from OTEL_EXPORTER_OTLP_ENDPOINT and
+    // OTEL_METRIC_EXPORT_INTERVAL. The timeout has to be below the interval or the SDK quietly
+    // falls back to sixty seconds, which looks like nothing being exported at all.
+    sdk::metrics::PeriodicExportingMetricReaderOptions reader_options;
+    reader_options.export_timeout_millis =
+        std::min(reader_options.export_timeout_millis, reader_options.export_interval_millis / 2);
+
+    auto meter_provider =
+        sdk::metrics::MeterProviderFactory::Create(std::make_unique<sdk::metrics::ViewRegistry>(), resource);
+    meter_provider->AddMetricReader(sdk::metrics::PeriodicExportingMetricReaderFactory::Create(
+        otlp::OtlpHttpMetricExporterFactory::Create(), reader_options));
+
+    provider = std::shared_ptr<sdk::metrics::MeterProvider>(std::move(meter_provider));
+
+    // The API keeps its own pointer type, which converts from a std::shared_ptr of the API's
+    // MeterProvider but not from one of the SDK's. Going through the base shares ownership rather
+    // than handing the API a pointer this file also owns.
+    const std::shared_ptr<opentelemetry::metrics::MeterProvider> api_provider = provider;
+    opentelemetry::metrics::Provider::SetMeterProvider(api_provider);
+
+    const auto interval = export_interval();
+    exporting = true;
+    exporter_thread = std::thread([interval]() {
+        std::unique_lock<std::mutex> lock{exporter_mutex};
+        while (exporting) {
+            if (exporter_wakeup.wait_for(lock, interval, []() { return not exporting; })) {
+                break; // shutting down; the flush there is the one that matters
+            }
+            lock.unlock();
+            provider->ForceFlush(SHUTDOWN_TIMEOUT);
+            lock.lock();
+        }
+    });
+#endif
+
+    // Without an SDK this asks the API's no-op provider, which hands out instruments that discard
+    // what they are given. That is what lets the module's own code be the same either way.
+    instruments.create_instruments();
+}
+
+void telemetry_shutdown() {
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+    {
+        std::lock_guard<std::mutex> lock{exporter_mutex};
+        exporting = false;
+    }
+    exporter_wakeup.notify_all();
+    if (exporter_thread.joinable()) {
+        exporter_thread.join();
+    }
+
+    if (provider != nullptr) {
+        provider->Shutdown(SHUTDOWN_TIMEOUT);
+        provider.reset();
+    }
+#endif
+}
+
+} // namespace module

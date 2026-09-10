@@ -176,6 +176,59 @@ def pascal_case(name: str) -> str:
     return ''.join(part[:1].upper() + part[1:] for part in name.split('_') if part)
 
 
+# The OpenTelemetry instrument each declared kind maps to, and the value type it takes. Counters
+# are unsigned in the API because a counter that could go down would not be one.
+telemetry_instrument_map = {
+    'gauge': {'factory': 'CreateDoubleGauge', 'int_factory': 'CreateInt64Gauge', 'verb': 'Record',
+              'api_class': 'Gauge'},
+    'counter': {'factory': 'CreateDoubleCounter', 'int_factory': 'CreateUInt64Counter', 'verb': 'Add',
+                'api_class': 'Counter'},
+    'updowncounter': {'factory': 'CreateDoubleUpDownCounter', 'int_factory': 'CreateInt64UpDownCounter',
+                      'verb': 'Add', 'api_class': 'UpDownCounter'},
+    'histogram': {'factory': 'CreateDoubleHistogram', 'int_factory': 'CreateUInt64Histogram', 'verb': 'Record',
+                  'api_class': 'Histogram'},
+}
+
+telemetry_value_cpp_type = {
+    'gauge': {'double': 'double', 'int': 'std::int64_t'},
+    'counter': {'double': 'double', 'int': 'std::uint64_t'},
+    'updowncounter': {'double': 'double', 'int': 'std::int64_t'},
+    'histogram': {'double': 'double', 'int': 'std::uint64_t'},
+}
+
+
+def build_module_telemetry_info(module_name, block):
+    """Flatten the top-level telemetry block into what the generated OpenTelemetry client needs.
+
+    The manifest keys metrics by their OpenTelemetry name, which is dotted and therefore not a C++
+    identifier; the generated member is the same name with dots turned into underscores. Everything
+    else is a straight translation of the declaration into the SDK's factory call.
+    """
+    metrics = []
+    for name, metric in block['metrics'].items():
+        kind = metric.get('instrument', 'gauge')
+        value_type = metric.get('type', 'double')
+        instrument = telemetry_instrument_map[kind]
+        metrics.append({
+            'name': name,
+            'member': name.replace('.', '_'),
+            'description': metric['description'],
+            'unit': metric.get('unit', ''),
+            'instrument': kind,
+            'value_type': value_type,
+            'cpp_type': telemetry_value_cpp_type[kind][value_type],
+            'factory': instrument['int_factory'] if value_type == 'int' else instrument['factory'],
+            'verb': instrument['verb'],
+            'api_class': instrument['api_class'],
+            'class_name': pascal_case(name.replace('.', '_')) + 'Metric',
+        })
+
+    return {
+        'meter': block.get('meter', f'everest.modules.{module_name}'),
+        'metrics': metrics,
+    }
+
+
 def build_telemetry_set_info(impl_id, impl_info):
     """Flatten a manifest telemetry block into what the publisher template needs.
 

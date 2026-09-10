@@ -193,3 +193,32 @@ pybind11_json:
   git: https://github.com/pybind/pybind11_json.git
   git_tag: 0.2.15
   cmake_condition: "NOT EVEREST_LIBS_ONLY OR (EVEREST_ENABLE_PY_SUPPORT AND EVEREST_BUILD_LIB_framework)"
+
+# The OpenTelemetry C++ SDK, for modules that publish telemetry. Only the OTLP HTTP exporter is
+# built: gRPC is a far larger dependency and a station exports over loopback, where it buys
+# nothing. Off unless EVEREST_ENABLE_OTLP_TELEMETRY is set, because it is the only thing in the
+# tree that needs protobuf.
+opentelemetry-cpp:
+  git: https://github.com/open-telemetry/opentelemetry-cpp.git
+  git_tag: v1.24.0
+  cmake_condition: "EVEREST_ENABLE_OTLP_TELEMETRY"
+  options:
+    - CMAKE_POLICY_VERSION_MINIMUM 3.5
+    - BUILD_TESTING OFF
+    - WITH_EXAMPLES OFF
+    - WITH_BENCHMARK OFF
+    - WITH_FUNC_TESTS OFF
+    - WITH_OTLP_HTTP ON
+    # The synchronous Gauge -- a value that is what it is, which is most of what a charger
+    # measures -- exists only in ABI 2. Without it every gauge would have to be an observable
+    # instrument with a callback and a value stashed for it to read.
+    - WITH_ABI_VERSION_1 OFF
+    - WITH_ABI_VERSION_2 ON
+    - WITH_OTLP_GRPC OFF
+    - WITH_OTLP_FILE OFF
+    - WITH_ABSEIL OFF
+    - WITH_PROMETHEUS OFF
+    - WITH_ZIPKIN OFF
+    - WITH_ELASTICSEARCH OFF
+    - OPENTELEMETRY_INSTALL OFF
+    - BUILD_SHARED_LIBS OFF

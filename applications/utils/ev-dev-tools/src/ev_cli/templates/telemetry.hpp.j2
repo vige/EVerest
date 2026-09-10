@@ -1,0 +1,150 @@
+{% from "helper_macros.j2" import print_template_info, print_spdx_line %}
+{{ print_spdx_line('Apache-2.0') }}
+#ifndef {{ info.hpp_guard }}
+#define {{ info.hpp_guard }}
+
+{{ print_template_info('1') }}
+
+#include <cstdint>
+#include <initializer_list>
+#include <string>
+#include <utility>
+
+#include <utils/types.hpp>
+
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+#include <opentelemetry/common/attribute_value.h>
+#include <opentelemetry/context/context.h>
+#include <opentelemetry/metrics/meter.h>
+#include <opentelemetry/metrics/provider.h>
+#include <opentelemetry/metrics/sync_instruments.h>
+#include <opentelemetry/nostd/shared_ptr.h>
+#include <opentelemetry/nostd/unique_ptr.h>
+#endif
+
+/// \file
+/// \brief What module {{ info.name }} measures, as OpenTelemetry instruments.
+///
+/// Generated from the `telemetry:` block of the manifest. A driver states what it measured and
+/// nothing else:
+///
+/// \code
+{% for metric in telemetry.metrics %}
+///     module::telemetry().{{ metric.member }}.{{ 'add' if metric.verb == 'Add' else 'record' }}({{ '1' if metric.value_type == 'int' else '41.5' }}{{ ', {{"evse", 1}}' }});
+{% endfor %}
+/// \endcode
+///
+/// Where the measurements go is not this module's business: `OTEL_EXPORTER_OTLP_ENDPOINT` and the
+/// other OTEL_* variables decide that, and are read by the SDK, so a driver has nothing to
+/// configure and a station operator uses the names the rest of the world uses.
+///
+/// This talks to the OpenTelemetry **API** only. Without a provider installed -- a build without
+/// EVEREST_ENABLE_OTLP_TELEMETRY, or a run with OTEL_SDK_DISABLED -- every call below is a no-op
+/// on a global no-op provider, which is why no driver needs an #ifdef.
+
+namespace module {
+
+/// \brief Attributes attached to one measurement, e.g. `{{ '{{"evse", 1}, {"phase", "L2"}}' }}`.
+///
+/// These are the dimensions a consumer selects on: one metric carries a data point per EVSE rather
+/// than a metric per EVSE, which is what OpenTelemetry expects and what an OCPP mapping file
+/// matches against.
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+using TelemetryAttributes =
+    std::initializer_list<std::pair<opentelemetry::nostd::string_view, opentelemetry::common::AttributeValue>>;
+#else
+/// A stand-in that accepts anything and keeps nothing, so that a module built without telemetry
+/// compiles unchanged and its measurements cost a call that optimises away.
+struct TelemetryAttributeValue {
+    template <typename T> TelemetryAttributeValue(T&&) {
+    }
+};
+using TelemetryAttributes = std::initializer_list<std::pair<const char*, TelemetryAttributeValue>>;
+#endif
+
+{% for metric in telemetry.metrics %}
+/// \brief {{ metric.description }}{{ ' [' + metric.unit + ']' if metric.unit }}
+///
+/// {{ metric.instrument }}, exported as "{{ metric.name }}".
+class {{ metric.class_name }} {
+public:
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+    void set_instrument(opentelemetry::nostd::unique_ptr<
+                        opentelemetry::metrics::{{ metric.api_class }}<{{ metric.cpp_type }}>> instrument) {
+        this->instrument = std::move(instrument);
+    }
+
+    {% if metric.verb == 'Add' %}
+    /// \brief Adds \p value to the count.
+    void add({{ metric.cpp_type }} value, TelemetryAttributes attributes = {}) {
+        if (this->instrument != nullptr) {
+            this->instrument->Add(value, attributes);
+        }
+    }
+    {% else %}
+    /// \brief States what the measurement reads now.
+    void record({{ metric.cpp_type }} value, TelemetryAttributes attributes = {}) {
+        if (this->instrument != nullptr) {
+            this->instrument->Record(value, attributes, opentelemetry::context::Context{});
+        }
+    }
+    {% endif %}
+
+private:
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::{{ metric.api_class }}<{{ metric.cpp_type }}>> instrument;
+#else
+    {% if metric.verb == 'Add' %}
+    /// \brief Adds \p value to the count. Built without telemetry, so this does nothing.
+    void add({{ metric.cpp_type }}, TelemetryAttributes = {}) {
+    }
+    {% else %}
+    /// \brief States what the measurement reads now. Built without telemetry, so this does nothing.
+    void record({{ metric.cpp_type }}, TelemetryAttributes = {}) {
+    }
+    {% endif %}
+#endif
+};
+
+{% endfor %}
+/// \brief The instruments of this module, one member per declared metric.
+struct ModuleTelemetry {
+    {% for metric in telemetry.metrics %}
+    {{ metric.class_name }} {{ metric.member }}; ///< {{ metric.description }}
+    {% endfor %}
+
+    /// \brief Creates the instruments against whatever meter provider is installed.
+    ///
+    /// Called by the module loader once the SDK is in place. Calling it without one is harmless:
+    /// the API's no-op provider hands out instruments that discard what they are given.
+    void create_instruments() {
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+        auto meter = opentelemetry::metrics::Provider::GetMeterProvider()->GetMeter("{{ telemetry.meter }}");
+        {% for metric in telemetry.metrics %}
+        this->{{ metric.member }}.set_instrument(
+            meter->{{ metric.factory }}("{{ metric.name }}", "{{ metric.description }}", "{{ metric.unit }}"));
+        {% endfor %}
+#endif
+    }
+};
+
+/// \brief The instruments of this module process.
+///
+/// A free function rather than a member of the module class, so that an implementation can measure
+/// something without the module handing it a reference, and so that the module's own header does
+/// not change when a metric is added to the manifest.
+ModuleTelemetry& telemetry();
+
+/// \brief Installs the OpenTelemetry SDK for this module process and creates the instruments.
+///
+/// Called by the module loader before any implementation initialises, so that an implementation
+/// may measure something in its own init.
+void telemetry_install(const ModuleInfo& info);
+
+/// \brief Flushes what the exporter still holds and stops its threads.
+///
+/// Bounded, because an unreachable collector must not stall an EVerest shutdown.
+void telemetry_shutdown();
+
+} // namespace module
+
+#endif // {{ info.hpp_guard }}

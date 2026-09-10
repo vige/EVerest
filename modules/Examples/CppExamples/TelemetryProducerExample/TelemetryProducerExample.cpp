@@ -6,14 +6,18 @@
 #include <chrono>
 #include <cmath>
 
+#include "telemetry.hpp"
+
 namespace module {
 
 void TelemetryProducerExample::init() {
-    // Nothing to initialise: both implementations are generated from the manifest declaration and
-    // answer get_definition and set_interest on their own.
+    // Nothing to initialise. The OpenTelemetry client is generated from the manifest and installed
+    // by the module loader before this runs.
+    invoke_init(*p_main);
 }
 
 void TelemetryProducerExample::ready() {
+    invoke_ready(*p_main);
     running = true;
     simulator = std::thread([this] { this->simulate(); });
 }
@@ -26,25 +30,21 @@ void TelemetryProducerExample::simulate() {
         std::this_thread::sleep_for(interval);
         ++tick;
 
-        // publish() is a no-op while nobody is interested, so there is no guard here. A driver
-        // whose sampling costs a bus transaction can ask any_interest() first and skip that work;
-        // reading a sine wave is not worth the branch.
+        // This is the whole producer side. Where these go, how often they leave the station and
+        // under whose identity are the SDK's business, decided by the OTEL_* environment
+        // variables; a driver states what it measured and stops there.
         const double phase = static_cast<double>(tick) / 10.0;
-        livedata::Sample live;
-        live.temperature_C = 40.0 + std::sin(phase);
-        live.frequency_Hz = 50.0 + 0.02 * std::cos(phase);
-        live.current_A = std::round(100.0 * std::abs(std::sin(phase / 3.0))) / 10.0;
-        live.fw_state = tick % 20 == 0 ? livedata::FwState::Idle : livedata::FwState::Measuring;
-        p_livedata->publish(live);
+        telemetry().powermeter_temperature.record(40.0 + std::sin(phase), {{"evse", 1}});
+        telemetry().powermeter_frequency.record(50.0 + 0.02 * std::cos(phase), {{"evse", 1}});
+        telemetry().powermeter_current.record(std::round(1000.0 * std::abs(std::sin(phase / 3.0))) / 10.0,
+                                              {{"evse", 1}});
 
-        // Diagnostics change slowly on purpose: de-duplication means most of these ticks publish
-        // nothing at all, which is what the consumer side has to cope with.
+        // A second EVSE on the same metric: one data point per EVSE, told apart by an attribute,
+        // which is what an OCPP mapping file selects on.
+        telemetry().powermeter_temperature.record(30.0 + std::sin(phase / 1.5), {{"evse", 2}});
+
         if (not config.live_only) {
-            diagnostics::Sample slow;
-            slow.uptime_s = static_cast<int>(tick * config.publish_interval_ms / 1000);
-            slow.error_count = 0;
-            slow.serial = "STUB-0001";
-            p_diagnostics->publish(slow);
+            telemetry().powermeter_uptime.add(config.publish_interval_ms / 1000);
         }
     }
 }

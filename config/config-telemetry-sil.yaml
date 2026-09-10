@@ -329,3 +329,7 @@ active_modules:
         database_path: /tmp/error_history.db
   system:
     module: System
+  telemetry_producer:
+    module: TelemetryProducerExample
+    config_module:
+      publish_interval_ms: 1000

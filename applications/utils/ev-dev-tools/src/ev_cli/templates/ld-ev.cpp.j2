@@ -9,6 +9,9 @@
 #endif
 
 #include "{{ info.module_header }}"
+{% if telemetry %}
+#include "telemetry.hpp"
+{% endif %}
 {% for impl in provides %}
 #include "{{ impl.class_header }}"
 {% endfor %}
@@ -97,6 +100,12 @@ void LdEverest::init(ModuleConfigs module_configs, const ModuleInfo& mod_info) {
 
     module_info = mod_info;
 
+    {% if telemetry %}
+    // Before any implementation initialises, so that one may measure something in its own init.
+    // What is exported and where it goes is decided by the OTEL_* environment variables.
+    module::telemetry_install(mod_info);
+    {% endif %}
+
     {% for impl in provides %}
     {% if impl.generated_impl %}
     if ({{ impl.id }}_impl_p != nullptr) {
@@ -167,6 +176,10 @@ void LdEverest::ready() {
 void LdEverest::shutdown() {
     EVLOG_debug << "shutdown() called on module {{ info.name }}";
     mod_ptr->shutdown();
+    {% if telemetry %}
+    // After the module has stopped measuring, so nothing is queued behind the flush.
+    module::telemetry_shutdown();
+    {% endif %}
 }
 
 void register_module_adapter(Everest::ModuleAdapter module_adapter) {

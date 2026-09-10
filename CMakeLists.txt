@@ -85,6 +85,11 @@ option(EVEREST_ENABLE_COVERAGE "Enable code coverage instrumentation and coverag
 option(EVEREST_BUILD_APPLICATIONS "Build applications like drivers for the EVerest stable API" ON)
 option(EVEREST_LIBS_ONLY "Only build libraries, skip modules/applications/config" OFF)
 option(EVEREST_IO_WITH_MQTT "Build MQTT (mosquitto) support in everest::io" ON)
+
+# Telemetry as OpenTelemetry: an OTLP receiver in the OCPP modules, and an OTLP client in the
+# modules that publish. Declared here rather than beside the code that uses it, because
+# dependencies.yaml tests it to decide whether to fetch opentelemetry-cpp.
+option(EVEREST_ENABLE_OTLP_TELEMETRY "Publish and receive telemetry as OpenTelemetry over OTLP" OFF)
 set(EVEREST_INCLUDE_LIBS "" CACHE STRING "Semicolon-separated allowlist of libraries to build (empty = all)")
 set(EVEREST_EXCLUDE_LIBS "" CACHE STRING "Semicolon-separated blocklist of libraries to skip")
 # list of compile options that are passed to modules if EVEREST_ENABLE_COMPILE_WARNINGS=ON
