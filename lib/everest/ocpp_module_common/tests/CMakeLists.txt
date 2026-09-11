@@ -13,10 +13,18 @@ target_sources(${TEST_TARGET_NAME}
     everest_device_model_storage_test.cpp
     grid_support_conversions_test.cpp
     network_conversions_test.cpp
-    otlp_metrics_decode_test.cpp
-    telemetry_device_model_storage_test.cpp
     transaction_handler_tests.cpp
 )
+
+# The telemetry tests follow their subject: without the flag there is no decoder and no telemetry
+# device model source to test.
+if(EVEREST_ENABLE_OTLP_TELEMETRY)
+    target_sources(${TEST_TARGET_NAME}
+        PRIVATE
+        otlp_metrics_decode_test.cpp
+        telemetry_device_model_storage_test.cpp
+    )
+endif()
 
 target_compile_definitions(${TEST_TARGET_NAME}
     PRIVATE

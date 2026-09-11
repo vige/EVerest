@@ -478,7 +478,9 @@ void GenericOcpp::ready(const ConfigServiceClient& client) {
         std::move(evse_connector_structure),
         std::move(connector_mapping),
         m_everest_device_model_storage,
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
         m_telemetry_device_model_storage,
+#endif
         mv_config.getDeviceModelConfigMappings(),
         static_cast<std::int32_t>(mv_config.getOcpp16NetworkConfigSlot()),
         mv_config.getEnableLegacyConfigMigration(),

@@ -18,17 +18,14 @@
 /// here, once, so nothing downstream has to know what a ScopeMetrics is.
 ///
 /// \par The schema this implements
-/// opentelemetry-proto **1.8.0**, specifically `opentelemetry/proto/collector/metrics/v1/
-/// metrics_service.proto` and the `common`, `resource` and `metrics` messages it reaches. Those
-/// files are not vendored here and protobuf is not a dependency of this library: the field numbers
-/// are transcribed into named constants in the .cpp, and the reader skips anything it does not
-/// recognise by wire type. The schema is stable and additive by policy, so a newer producer decodes
-/// as well as an older one -- but a field renumbered upstream would decode silently into the wrong
-/// thing, which is why the version is stated here rather than left to be inferred.
+/// opentelemetry-proto, as vendored by opentelemetry-cpp and compiled by protoc during the build:
+/// this reads `ExportMetricsServiceRequest` through the generated classes, so the receiver and the
+/// producers of the same station are decoding and encoding the same definitions. Both halves are
+/// built only with EVEREST_ENABLE_OTLP_TELEMETRY, and both get protobuf from the same place.
 ///
-/// The same schema arrives on the producer side by a different route: opentelemetry-cpp vendors
-/// opentelemetry-proto as a submodule and runs protoc over it at build time, so a module built with
-/// EVEREST_ENABLE_OTLP_TELEMETRY links a real protobuf runtime. This receiver does not.
+/// What is left here is the flattening and the policy: which shapes have a device model reading
+/// (Gauge and Sum), which are counted and dropped (Histogram, ExponentialHistogram, Summary), and
+/// how an attribute value becomes the text a mapping file can be written against.
 namespace ocpp_module_common::otlp {
 
 /// \brief One numeric data point, with everything the tree above it contributed.

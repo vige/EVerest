@@ -9,7 +9,6 @@
 #include <gtest/gtest.h>
 
 #include <everest/ocpp_module_common/otlp/metrics_decode.hpp>
-#include <everest/ocpp_module_common/otlp/wire.hpp>
 
 /// \file
 /// \brief Tests for the OTLP metrics decoder.
@@ -185,41 +184,6 @@ TEST(OtlpMetricsDecode, IgnoresAFieldItDoesNotKnow) {
     ASSERT_TRUE(decoded.has_value());
     ASSERT_EQ(decoded->samples.size(), 1);
     EXPECT_EQ(decoded->samples.front().metric, "powermeter.temperature");
-}
-
-TEST(OtlpWire, SkipsEveryWireTypeByLength) {
-    // varint, fixed64, length delimited, fixed32 -- one field of each, then a marker we must reach
-    const std::string body("\x08\x96\x01"          // field 1, varint 150
-                           "\x11\x00\x00\x00\x00\x00\x00\x00\x00" // field 2, fixed64
-                           "\x1a\x02hi"            // field 3, "hi"
-                           "\x25\x00\x00\x00\x00"  // field 4, fixed32
-                           "\x28\x07",             // field 5, varint 7
-                           3 + 9 + 4 + 5 + 2);
-    Reader reader(body);
-    std::uint32_t last = 0;
-    std::uint64_t last_value = 0;
-    while (const auto tag = reader.next()) {
-        last = tag->field;
-        if (tag->field == 5) {
-            const auto value = reader.varint();
-            ASSERT_TRUE(value.has_value());
-            last_value = *value;
-        } else {
-            ASSERT_TRUE(reader.skip(tag->type));
-        }
-    }
-    EXPECT_TRUE(reader.ok());
-    EXPECT_EQ(last, 5);
-    EXPECT_EQ(last_value, 7);
-}
-
-TEST(OtlpWire, RefusesAVarintThatNeverEnds) {
-    const std::string body("\x08\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80\x80", 13);
-    Reader reader(body);
-    const auto tag = reader.next();
-    ASSERT_TRUE(tag.has_value());
-    EXPECT_FALSE(reader.varint().has_value());
-    EXPECT_FALSE(reader.ok());
 }
 
 } // namespace

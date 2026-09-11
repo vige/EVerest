@@ -17,20 +17,33 @@ target_sources(ocpp_module_common
         src/device_model/composed_device_model_storage.cpp
         src/device_model/definitions.cpp
         src/device_model/everest_device_model_storage.cpp
-        src/device_model/telemetry_device_model_storage.cpp
-        src/device_model/telemetry_mapping.cpp
-        src/otlp/metrics_decode.cpp
 )
 
-# The OTLP receiver: an HTTP endpoint a producer posts metrics to. The option itself lives in the
-# top-level CMakeLists, because dependencies.yaml reads it.
+# The OTLP receiver: an HTTP endpoint a producer posts metrics to, the decoder behind it, and the
+# device model source it feeds. All of it is optional, so all of it is behind the flag -- nothing
+# here is compiled, and no dependency is fetched, in a build that does not ask for telemetry. The
+# option itself lives in the top-level CMakeLists, because dependencies.yaml reads it.
 if(EVEREST_ENABLE_OTLP_TELEMETRY)
     if(DISABLE_EDM)
         find_package(libwebsockets REQUIRED)
+        find_package(opentelemetry-cpp REQUIRED)
     endif()
-    target_sources(ocpp_module_common PRIVATE src/otlp/http_server.cpp)
+    target_sources(ocpp_module_common
+        PRIVATE
+            src/otlp/http_server.cpp
+            src/otlp/metrics_decode.cpp
+            src/device_model/telemetry_device_model_storage.cpp
+            src/device_model/telemetry_mapping.cpp
+    )
     target_compile_definitions(ocpp_module_common PUBLIC EVEREST_ENABLE_OTLP_TELEMETRY)
-    target_link_libraries(ocpp_module_common PRIVATE websockets_shared)
+    # opentelemetry_proto is the generated OTLP code opentelemetry-cpp compiles for its own
+    # exporter, and it carries protobuf with it. The producers of a station encode with these
+    # definitions, so the receiver decodes with the same ones rather than a transcription of them.
+    target_link_libraries(ocpp_module_common
+        PRIVATE
+            websockets_shared
+            opentelemetry-cpp::proto
+    )
 endif()
 
 target_include_directories(ocpp_module_common

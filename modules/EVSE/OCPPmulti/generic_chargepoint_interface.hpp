@@ -4,7 +4,9 @@
 #pragma once
 
 #include <everest/ocpp_module_common/device_model/everest_device_model_storage.hpp>
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
 #include <everest/ocpp_module_common/device_model/telemetry_device_model_storage.hpp>
+#endif
 #include <everest/ocpp_module_common/error_handling.hpp>
 #include <everest/ocpp_module_common/transaction_handler.hpp>
 
@@ -220,8 +222,10 @@ struct GenericChargePointInterface {
         ConnectorStructure evse_connector_structure;
         ConnectorStructureV16 connector_mapping;
         std::shared_ptr<ocpp_module_common::device_model::EverestDeviceModelStorage> everest_device_model;
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
         /// Null when the station exposes no telemetry, which is the ordinary case.
         std::shared_ptr<ocpp_module_common::device_model::TelemetryDeviceModelStorage> telemetry_device_model;
+#endif
         std::string v16_device_model_config_mappings;
         std::int32_t v16_ocpp16_network_config_slot;
         bool v16_enable_legacy_config_migration;

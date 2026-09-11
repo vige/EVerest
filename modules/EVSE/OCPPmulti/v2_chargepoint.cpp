@@ -461,6 +461,7 @@ ocpp::v2::Callbacks ChargePointV2::configure_callbacks() {
 void ChargePointV2::init(init_args_t& args) {
     // initialise libocpp device model. Telemetry variables are seeded into the same database as
     // ordinary rows, so their monitors live in the ordinary monitor table.
+#ifdef EVEREST_ENABLE_OTLP_TELEMETRY
     auto libocpp_device_model_storage = module::device_model::make_ocpp_device_model_storage(
         args.v2_device_model_database_path, args.v2_device_model_database_migration_path,
         args.v2_device_model_config_path, args.telemetry_device_model);
@@ -468,6 +469,15 @@ void ChargePointV2::init(init_args_t& args) {
     // initialise composed device model, this will be provided to the ChargePoint constructor
     auto composed_device_model_storage = module::device_model::make_composed_device_model_storage(
         std::move(libocpp_device_model_storage), args.everest_device_model, args.telemetry_device_model);
+#else
+    // no telemetry source to seed or register, so the stock construction over the config directory
+    auto libocpp_device_model_storage = std::make_shared<ocpp::v2::DeviceModelStorageSqlite>(
+        args.v2_device_model_database_path, args.v2_device_model_database_migration_path,
+        args.v2_device_model_config_path);
+
+    auto composed_device_model_storage = module::device_model::make_composed_device_model_storage(
+        std::move(libocpp_device_model_storage), args.everest_device_model);
+#endif
 
     const auto ocpp_share_path = args.share_path / "OCPP201";
     const auto sql_init_path = ocpp_share_path / SQL_CORE_MIGRATIONS;

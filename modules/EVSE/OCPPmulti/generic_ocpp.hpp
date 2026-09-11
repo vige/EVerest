@@ -25,8 +25,8 @@
 #include <generated/interfaces/session_cost/Implementation.hpp>
 #include <generated/interfaces/system/Interface.hpp>
 
-#include <everest/ocpp_module_common/device_model/telemetry_device_model_storage.hpp>
 #ifdef EVEREST_ENABLE_OTLP_TELEMETRY
+#include <everest/ocpp_module_common/device_model/telemetry_device_model_storage.hpp>
 #include <everest/ocpp_module_common/otlp/http_server.hpp>
 #endif
 
@@ -207,11 +207,11 @@ private:
     /// been measured, so the receiver may start after it without a gap.
 #ifdef EVEREST_ENABLE_OTLP_TELEMETRY
     std::unique_ptr<ocpp_module_common::otlp::HttpServer> m_telemetry_receiver;
-#endif
     std::shared_ptr<module::device_model::TelemetryDeviceModelStorage> m_telemetry_device_model_storage;
+#endif
 
     /// \brief Builds m_telemetry_device_model_storage from the mapping file, or leaves it null,
-    /// and starts the receiver that feeds it.
+    /// and starts the receiver that feeds it. A no-op without EVEREST_ENABLE_OTLP_TELEMETRY.
     void init_telemetry();
 
     // needs to be thread safe - used by v2_chargepoint and this object
