@@ -42,7 +42,6 @@ target_link_libraries(${MODULE_NAME}
     everest::ocpp_conversions
     everest::ocpp_evse_security
     everest::ocpp_module_common
-    everest::telemetry
 )
 
 if(EVEREST_CORE_BUILD_TESTING)

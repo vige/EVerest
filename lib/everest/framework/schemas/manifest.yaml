@@ -30,64 +30,6 @@ $defs:
         additionalProperties: true
     additionalProperties: false
     default: {}
-  telemetry_set_schema:
-    description: >-
-      Declaration of one telemetry set, allowed only on an implementation of the telemetry
-      interface. Optional by design: a module whose telemetry depends on its configuration declares
-      its entries in code instead.
-    type: object
-    required:
-      - entries
-    properties:
-      max_publish_rate_hz:
-        description: Producer side cap, updates are coalesced to this rate
-        type: number
-        exclusiveMinimum: 0
-      description:
-        description: Human readable description of the set
-        type: string
-        minLength: 2
-      entries:
-        description: The declared entries, keyed by entry name
-        type: object
-        minProperties: 1
-        patternProperties:
-          ^[a-zA-Z_][a-zA-Z0-9_]*$:
-            type: object
-            required:
-              - description
-              - type
-            properties:
-              description:
-                type: string
-                minLength: 2
-              type:
-                description: Scalar value type. Flat scalars only, no objects and no arrays.
-                type: string
-                enum:
-                  - boolean
-                  - integer
-                  - number
-                  - string
-              unit:
-                type: string
-                minLength: 1
-              minimum:
-                description: Lower bound, integer and number entries only
-                type: number
-              maximum:
-                description: Upper bound, integer and number entries only
-                type: number
-              enum:
-                description: Allowed values, string entries only
-                type: array
-                minItems: 1
-                uniqueItems: true
-                items:
-                  type: string
-            additionalProperties: false
-        additionalProperties: false
-    additionalProperties: false
 type: object
 required:
   - description
@@ -120,7 +62,7 @@ properties:
         # --> we have to prevent this matching to not double validate against competing schemes
         patternProperties:
           # allow all sorts of additional properties that can be used to match requirements to
-          ^(?!interface$|config$|cmds$|vars$|telemetry$)[a-zA-Z_][a-zA-Z0-9_.-]*$:
+          ^(?!interface$|config$|cmds$|vars$)[a-zA-Z_][a-zA-Z0-9_.-]*$:
             # only allow primitive types in here
             type:
               - string
@@ -142,11 +84,6 @@ properties:
               Config set for this implementation (and possibly default
               values) declared as json schema
             $ref: '#/$defs/config_set_schema'
-          telemetry:
-            description: >-
-              Declaration of the telemetry set this implementation publishes. Only valid together
-              with 'interface: telemetry', which the manager checks.
-            $ref: '#/$defs/telemetry_set_schema'
         additionalProperties: false
     # add empty provides if not already present
     default: {}

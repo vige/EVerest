@@ -51,7 +51,6 @@ target_link_libraries(ocpp_module_common
     PUBLIC
         everest::ocpp
         everest::framework
-        everest::telemetry
     PRIVATE
         everest::ocpp_conversions
         everest::yaml
