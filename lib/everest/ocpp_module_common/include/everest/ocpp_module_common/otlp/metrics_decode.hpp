@@ -16,6 +16,19 @@
 /// attributes that the level below inherits. A device model has no use for the tree: it wants a
 /// flat list of "this named measurement, with these attributes, reads this". Flattening happens
 /// here, once, so nothing downstream has to know what a ScopeMetrics is.
+///
+/// \par The schema this implements
+/// opentelemetry-proto **1.8.0**, specifically `opentelemetry/proto/collector/metrics/v1/
+/// metrics_service.proto` and the `common`, `resource` and `metrics` messages it reaches. Those
+/// files are not vendored here and protobuf is not a dependency of this library: the field numbers
+/// are transcribed into named constants in the .cpp, and the reader skips anything it does not
+/// recognise by wire type. The schema is stable and additive by policy, so a newer producer decodes
+/// as well as an older one -- but a field renumbered upstream would decode silently into the wrong
+/// thing, which is why the version is stated here rather than left to be inferred.
+///
+/// The same schema arrives on the producer side by a different route: opentelemetry-cpp vendors
+/// opentelemetry-proto as a submodule and runs protoc over it at build time, so a module built with
+/// EVEREST_ENABLE_OTLP_TELEMETRY links a real protobuf runtime. This receiver does not.
 namespace ocpp_module_common::otlp {
 
 /// \brief One numeric data point, with everything the tree above it contributed.

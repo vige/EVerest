@@ -13,8 +13,10 @@ namespace ocpp_module_common::otlp {
 
 namespace {
 
-/// Field numbers from opentelemetry/proto/{common,resource,metrics}/v1. Named rather than written
-/// at the point of use, because a wrong number here decodes silently into the wrong thing.
+/// Field numbers from opentelemetry/proto/{common,resource,metrics}/v1, opentelemetry-proto 1.8.0.
+/// Named rather than written at the point of use, because a wrong number here decodes silently into
+/// the wrong thing. The schema is not vendored -- see the header for why, and for how to check
+/// these against it.
 namespace field {
 // ExportMetricsServiceRequest
 constexpr std::uint32_t REQUEST_RESOURCE_METRICS = 1;
